@@ -314,7 +314,7 @@ def parse_meshes(f, count, offset):
         mesh = {}
         base = f.tell()
         mesh['unk0'] = read_uint(f)
-        mesh['material'] = read_uint(f)
+        mesh['material'] = read_int(f)
         f.read(4) # Always zero
         layout_offset = read_uint(f)
         mesh['vertex_size'] = read_ushort(f)
@@ -585,7 +585,8 @@ def load(operator, context, filepath='', **kwargs):
             mod.object = armature_obj
 
             # Assign material
-            mesh.materials.append(materials[mdb_mesh['material']])
+            if mdb_mesh['material'] != -1:
+                mesh.materials.append(materials[mdb_mesh['material']])
 
             mesh.update()
 
