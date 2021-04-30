@@ -530,7 +530,7 @@ def load(operator, context, filepath='', **kwargs):
             faces = []
             indices = mdb_mesh['indices']
             for i in range(0, len(indices), 3):
-                faces.append((indices[i+2], indices[i+1], indices[i+0]))
+                faces.append((indices[i+0], indices[i+1], indices[i+2]))
 
             # Read vertices
             vertex = []
@@ -538,7 +538,7 @@ def load(operator, context, filepath='', **kwargs):
                 x = vert['position0'][0]
                 y = vert['position0'][1]
                 z = vert['position0'][2]
-                vertex.append((-x, -z, y))
+                vertex.append((x, -z, y))
 
             # Add basic mesh
             mesh = bpy.data.meshes.new('%s_Data' % name)
