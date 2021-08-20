@@ -395,6 +395,89 @@ def load(operator, context, filepath='', **kwargs):
     # Texture cache
     textures = {}
 
+    # Create unswizzle node group
+    if bpy.data.node_groups.get('Normal Unswizzle') is None:
+        nspace = 160
+        unswizzle = bpy.data.node_groups.new('Normal Unswizzle', 'ShaderNodeTree')
+
+        group_inputs = unswizzle.nodes.new('NodeGroupInput')
+        group_inputs.location[0] = nspace * 0
+        unswizzle.inputs.new('NodeSocketColor', 'Color')
+        unswizzle.inputs.new('NodeSocketFloat', 'Alpha')
+
+        splitRGB = unswizzle.nodes.new('ShaderNodeSeparateRGB')
+        splitRGB.location[0] = nspace * 1
+        unswizzle.links.new(splitRGB.inputs['Image'], group_inputs.outputs['Color'])
+
+        valR = unswizzle.nodes.new('ShaderNodeMath')
+        valR.location[0] = nspace * 2
+        valR.operation = 'MULTIPLY'
+        unswizzle.links.new(valR.inputs[0], splitRGB.outputs['R'])
+        unswizzle.links.new(valR.inputs[1], group_inputs.outputs['Alpha'])
+
+        mulR = unswizzle.nodes.new('ShaderNodeMath')
+        mulR.location[0] = nspace * 3
+        mulR.operation = 'MULTIPLY_ADD'
+        unswizzle.links.new(mulR.inputs[0], valR.outputs['Value'])
+        mulR.inputs[1].default_value = 2.0
+        mulR.inputs[2].default_value = -1.0
+
+        mulG = unswizzle.nodes.new('ShaderNodeMath')
+        mulG.location[0] = nspace * 3
+        mulG.location[1] = mulG.location[1] - 170
+        mulG.operation = 'MULTIPLY_ADD'
+        unswizzle.links.new(mulG.inputs[0], splitRGB.outputs['G'])
+        mulG.inputs[1].default_value = 2.0
+        mulG.inputs[2].default_value = -1.0
+
+        powR = unswizzle.nodes.new('ShaderNodeMath')
+        powR.location[0] = nspace * 4
+        powR.operation = 'MULTIPLY'
+        unswizzle.links.new(powR.inputs[0], mulR.outputs['Value'])
+        unswizzle.links.new(powR.inputs[1], mulR.outputs['Value'])
+
+        powG = unswizzle.nodes.new('ShaderNodeMath')
+        powG.location[0] = nspace * 4
+        powG.location[1] = powG.location[1] - 170
+        powG.operation = 'MULTIPLY'
+        unswizzle.links.new(powG.inputs[0], mulG.outputs['Value'])
+        unswizzle.links.new(powG.inputs[1], mulG.outputs['Value'])
+
+        subR = unswizzle.nodes.new('ShaderNodeMath')
+        subR.location[0] = nspace * 5
+        subR.operation = 'SUBTRACT'
+        subR.inputs[0].default_value = 1.0
+        unswizzle.links.new(subR.inputs[1], powR.outputs['Value'])
+
+        subG = unswizzle.nodes.new('ShaderNodeMath')
+        subG.location[0] = nspace * 6
+        subG.operation = 'SUBTRACT'
+        unswizzle.links.new(subG.inputs[0], subR.outputs['Value'])
+        unswizzle.links.new(subG.inputs[1], powG.outputs['Value'])
+
+        sqrtB = unswizzle.nodes.new('ShaderNodeMath')
+        sqrtB.location[0] = nspace * 7
+        sqrtB.operation = 'SQRT'
+        unswizzle.links.new(sqrtB.inputs[0], subG.outputs['Value'])
+
+        valB = unswizzle.nodes.new('ShaderNodeMath')
+        valB.location[0] = nspace * 8
+        valB.operation = 'MULTIPLY_ADD'
+        unswizzle.links.new(valB.inputs[0], sqrtB.outputs['Value'])
+        valB.inputs[1].default_value = 0.5
+        valB.inputs[2].default_value = 0.5
+
+        combineRGB = unswizzle.nodes.new('ShaderNodeCombineRGB')
+        combineRGB.location[0] = nspace * 9
+        unswizzle.links.new(combineRGB.inputs['R'], valR.outputs['Value'])
+        unswizzle.links.new(combineRGB.inputs['G'], splitRGB.outputs['G'])
+        unswizzle.links.new(combineRGB.inputs['B'], valB.outputs['Value'])
+
+        group_outputs = unswizzle.nodes.new('NodeGroupOutput')
+        group_outputs.location[0] = nspace * 10
+        unswizzle.outputs.new('NodeSocketColor', 'Color')
+        unswizzle.links.new(group_outputs.inputs['Color'], combineRGB.outputs['Image'])
+
     # Create materials
     materials = []
     for mdb_material in mdb['materials']:
@@ -403,6 +486,7 @@ def load(operator, context, filepath='', **kwargs):
         material.use_nodes = True
         bsdf = material.node_tree.nodes['Principled BSDF']
         bsdf.inputs['Roughness'].default_value = 1.0 # Remove shine
+        unhandled = 0
         for texture in mdb_material['textures']:
             texImage = material.node_tree.nodes.new('ShaderNodeTexImage')
             filename = mdb['textures'][texture['texture']]['filename']
@@ -416,88 +500,34 @@ def load(operator, context, filepath='', **kwargs):
                     print(e)
             if texture['map'] == 'albedo':
                 texImage.location[0] = bsdf.location[0] - 300
-                texImage.location[1] = bsdf.location[1]
+                texImage.location[1] = bsdf.location[1] - 80
                 material.node_tree.links.new(bsdf.inputs['Base Color'], texImage.outputs['Color'])
                 material.node_tree.links.new(bsdf.inputs['Alpha'], texImage.outputs['Alpha'])
             elif texture['map'] == 'normal':
                 if texImage.image is not None:
                     texImage.image.colorspace_settings.name = 'Linear'
-                texImage.location[0] = bsdf.location[0] - 150 * 12
+                texImage.location[0] = bsdf.location[0] - 700
+                texImage.location[1] = bsdf.location[1] - 510
 
                 # Unswizzle normal map
-                splitRGB = material.node_tree.nodes.new('ShaderNodeSeparateRGB')
-                splitRGB.location[0] = bsdf.location[0] - 150 * 10
-                material.node_tree.links.new(splitRGB.inputs['Image'], texImage.outputs['Color'])
-
-                valR = material.node_tree.nodes.new('ShaderNodeMath')
-                valR.location[0] = bsdf.location[0] - 150 * 9
-                valR.operation = 'MULTIPLY'
-                material.node_tree.links.new(valR.inputs[0], splitRGB.outputs['R'])
-                material.node_tree.links.new(valR.inputs[1], texImage.outputs['Alpha'])
-
-                mulR = material.node_tree.nodes.new('ShaderNodeMath')
-                mulR.location[0] = bsdf.location[0] - 150 * 8
-                mulR.operation = 'MULTIPLY_ADD'
-                material.node_tree.links.new(mulR.inputs[0], valR.outputs['Value'])
-                mulR.inputs[1].default_value = 2.0
-                mulR.inputs[2].default_value = -1.0
-
-                mulG = material.node_tree.nodes.new('ShaderNodeMath')
-                mulG.location[0] = bsdf.location[0] - 150 * 8
-                mulG.location[1] = mulG.location[1] - 170
-                mulG.operation = 'MULTIPLY_ADD'
-                material.node_tree.links.new(mulG.inputs[0], splitRGB.outputs['G'])
-                mulG.inputs[1].default_value = 2.0
-                mulG.inputs[2].default_value = -1.0
-
-                powR = material.node_tree.nodes.new('ShaderNodeMath')
-                powR.location[0] = bsdf.location[0] - 150 * 7
-                powR.operation = 'MULTIPLY'
-                material.node_tree.links.new(powR.inputs[0], mulR.outputs['Value'])
-                material.node_tree.links.new(powR.inputs[1], mulR.outputs['Value'])
-
-                powG = material.node_tree.nodes.new('ShaderNodeMath')
-                powG.location[0] = bsdf.location[0] - 150 * 7
-                powG.location[1] = powG.location[1] - 170
-                powG.operation = 'MULTIPLY'
-                material.node_tree.links.new(powG.inputs[0], mulG.outputs['Value'])
-                material.node_tree.links.new(powG.inputs[1], mulG.outputs['Value'])
-
-                subR = material.node_tree.nodes.new('ShaderNodeMath')
-                subR.location[0] = bsdf.location[0] - 150 * 6
-                subR.operation = 'SUBTRACT'
-                subR.inputs[0].default_value = 1.0
-                material.node_tree.links.new(subR.inputs[1], powR.outputs['Value'])
-
-                subG = material.node_tree.nodes.new('ShaderNodeMath')
-                subG.location[0] = bsdf.location[0] - 150 * 5
-                subG.operation = 'SUBTRACT'
-                material.node_tree.links.new(subG.inputs[0], subR.outputs['Value'])
-                material.node_tree.links.new(subG.inputs[1], powG.outputs['Value'])
-
-                sqrtB = material.node_tree.nodes.new('ShaderNodeMath')
-                sqrtB.location[0] = bsdf.location[0] - 150 * 4
-                sqrtB.operation = 'SQRT'
-                material.node_tree.links.new(sqrtB.inputs[0], subG.outputs['Value'])
-
-                valB = material.node_tree.nodes.new('ShaderNodeMath')
-                valB.location[0] = bsdf.location[0] - 150 * 3
-                valB.operation = 'MULTIPLY_ADD'
-                material.node_tree.links.new(valB.inputs[0], sqrtB.outputs['Value'])
-                valB.inputs[1].default_value = 0.5
-                valB.inputs[2].default_value = 0.5
-
-                combineRGB = material.node_tree.nodes.new('ShaderNodeCombineRGB')
-                combineRGB.location[0] = bsdf.location[0] - 150 * 2
-                material.node_tree.links.new(combineRGB.inputs['R'], valR.outputs['Value'])
-                material.node_tree.links.new(combineRGB.inputs['G'], splitRGB.outputs['G'])
-                material.node_tree.links.new(combineRGB.inputs['B'], valB.outputs['Value'])
+                unswizzle = material.node_tree.nodes.new('ShaderNodeGroup')
+                unswizzle.location[0] = bsdf.location[0] - 400
+                unswizzle.location[1] = bsdf.location[1] - 510
+                unswizzle.node_tree = bpy.data.node_groups.get('Normal Unswizzle')
+                unswizzle.show_options = False
+                material.node_tree.links.new(unswizzle.inputs['Color'], texImage.outputs['Color'])
+                material.node_tree.links.new(unswizzle.inputs['Alpha'], texImage.outputs['Alpha'])
 
                 # Connect fixed normal map
                 normalMap = material.node_tree.nodes.new('ShaderNodeNormalMap')
-                normalMap.location[0] = bsdf.location[0] - 150 * 1
-                material.node_tree.links.new(normalMap.inputs['Color'], combineRGB.outputs['Image'])
+                normalMap.location[0] = bsdf.location[0] - 200
+                normalMap.location[1] = bsdf.location[1] - 510
+                material.node_tree.links.new(normalMap.inputs['Color'], unswizzle.outputs['Color'])
                 material.node_tree.links.new(bsdf.inputs['Normal'], normalMap.outputs['Normal'])
+            else:
+                texImage.location[0] = bsdf.location[0] - 700 + unhandled * 40
+                texImage.location[1] = bsdf.location[1] - unhandled * 40
+                unhandled += 1
         materials.append(material)
 
     # Add armature and bones
