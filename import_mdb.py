@@ -579,7 +579,8 @@ def load(operator, context, filepath='', **kwargs):
                     groups.append(mesh_obj.vertex_groups.new(name=mdb['names'][n])) # TODO: Bone name
                 for i, vert in enumerate(vertices):
                     for n in range(4):
-                        groups[vert['BLENDINDICES0'][n]].add([i], vert['BLENDWEIGHT0'][n], 'ADD')
+                        if vert['BLENDWEIGHT0'][n] != 0:
+                            groups[vert['BLENDINDICES0'][n]].add([i], vert['BLENDWEIGHT0'][n], 'ADD')
 
             mod = mesh_obj.modifiers.new("Armature", 'ARMATURE')
             mod.object = armature_obj
