@@ -555,7 +555,7 @@ def load(operator, context, filepath='', **kwargs):
                     x = vert['normal0'][0]
                     y = vert['normal0'][1]
                     z = vert['normal0'][2]
-                    normals.append((-x, -z, y))
+                    normals.append((x, -z, y))
                 mesh.normals_split_custom_set_from_vertices(normals)
                 mesh.use_auto_smooth = True # Enable custom normals
             
