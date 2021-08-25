@@ -3,6 +3,7 @@
 import os
 import bpy
 import mathutils
+import numpy as np
 
 from struct import pack, unpack
 
@@ -42,40 +43,6 @@ def read_wstr(file):
             break
         data.extend(char)
     return data.decode('utf-16')
-
-
-def read_half(file):
-    return f16_to_f32(unpack('<h', file.read(2))[0])
-
-
-def f16_to_f32(float16):
-    s = int((float16 >> 15) & 0b1)  # sign
-    e = int((float16 >> 10) & 0x0000001f)  # exponent
-    f = int(float16 & 0x000003ff)  # fraction
-
-    if e == 0 and f != 0:
-        while not (f & 0x00000400):
-            f = f << 1
-            e -= 1
-        e += 1
-        f &= ~0x00000400
-
-    if (not (e == 0 and f == 0)) and e != 31:
-        e = e + (127 - 15)
-        e = e << 23
-
-    elif (e == 31):
-        e = 0x7f800000
-
-    if not ((e == 0 or e == 31) and f == 0):
-        f = f << 13
-
-    s = (s << 31)
-
-    int_var = int(s | e | f)
-    float_var = unpack('<f', pack('<I', int_var))[0]
-
-    return float_var
 
 
 def read_matrix(file):
@@ -282,20 +249,15 @@ def parse_vertices(f, count, offset, layout, vertex_size):
             array = []
             type = elem['type']
             if type == 1: #float4
-                for n in range(4):
-                    array.append(read_float(f))
+                array = unpack("ffff", f.read(16))
             elif type == 4: #float3
-                for n in range(3):
-                    array.append(read_float(f))
+                array = unpack("fff", f.read(12))
             elif type == 7: #half4
-                for n in range(4):
-                    array.append(read_half(f))
+                array = np.frombuffer(f.read(8), dtype=np.half)
             elif type == 12: #float2
-                for n in range(2):
-                    array.append(read_float(f))
+                array = unpack("ff", f.read(8))
             elif type == 21: #ubyte4
-                for n in range(4):
-                    array.append(f.read(1)[0])
+                array = unpack("BBBB", f.read(4))
             else:
                 print("Unknown vertex layout type: " + str(type))
                 if j < len(layout) - 1:
