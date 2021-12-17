@@ -7,8 +7,9 @@ import numpy as np
 
 from struct import pack, unpack
 
+from . import shader
 
-# Helper functions
+# Read helper functions
 def read_ushort(file):
     return unpack('<H', file.read(2))[0]
 
@@ -53,7 +54,7 @@ def read_matrix(file):
             mat[y][x] = read_float(file)
     return mat
 
-# Main functions
+# Parsing functions
 def parse_names(f, count, offset):
     names = []
     f.seek(offset)
@@ -133,28 +134,30 @@ def parse_textures(f, count, offset):
     return textures
 
 
-def parse_mat_sub1(f, count, offset):
-    mat_sub1s = []
+def parse_mat_param(f, count, offset):
+    mat_params = []
     f.seek(offset)
     for i in range(count):
-        mat_sub1 = {}
+        mat_param = {}
         base = f.tell()
-        mat_sub1['unk0'] = read_float(f)
-        mat_sub1['unk1'] = read_float(f)
-        mat_sub1['unk2'] = read_float(f)
-        mat_sub1['unk3'] = read_float(f)
+        mat_param['val0'] = read_float(f)
+        mat_param['val1'] = read_float(f)
+        mat_param['val2'] = read_float(f)
+        mat_param['val3'] = read_float(f)
         f.read(8) # Always zero
-        string = read_uint(f)
-        mat_sub1['unk4'] = read_uint(f)
+        name = read_uint(f)
+        mat_param['unk'] = f.read(1)[0]
+        mat_param['size'] = f.read(1)[0]
+        f.read(2) # Always zero
         next = f.tell()
         assert next - base == 32
 
-        f.seek(base+string)
-        mat_sub1['string'] = read_str(f)
+        f.seek(base+name)
+        mat_param['name'] = read_str(f)
 
         f.seek(next)
-        mat_sub1s.append(mat_sub1)
-    return mat_sub1s
+        mat_params.append(mat_param)
+    return mat_params
 
 
 def parse_mat_txr(f, count, offset):
@@ -189,21 +192,21 @@ def parse_materials(f, count, offset, name_table):
         material['index'] = read_ushort(f)
         material['unk0'] = read_ushort(f)
         material_name = read_uint(f)
-        sound_name = read_uint(f)
-        sub1_offset = read_uint(f)
-        sub1_count = read_uint(f)
-        sub2_offset = read_uint(f)
-        sub2_count = read_uint(f)
+        shader = read_uint(f)
+        param_offset = read_uint(f)
+        param_count = read_uint(f)
+        txr_offset = read_uint(f)
+        txr_count = read_uint(f)
         material['unk1'] = read_uint(f)
         next = f.tell()
         assert next - base == 32
 
         material['name'] = name_table[material_name]
-        f.seek(base+sound_name)
-        material['sound_name'] = read_wstr(f)
+        f.seek(base+shader)
+        material['shader'] = read_wstr(f)
 
-        material['sub1'] = parse_mat_sub1(f, sub1_count, base+sub1_offset)
-        material['textures'] = parse_mat_txr(f, sub2_count, base+sub2_offset)
+        material['params'] = parse_mat_param(f, param_count, base+param_offset)
+        material['textures'] = parse_mat_txr(f, txr_count, base+txr_offset)
 
         f.seek(next)
         materials.append(material)
@@ -346,6 +349,13 @@ def parse_mdb(f):
     return mdb
 
 
+def warnparam(input, material, param):
+    if input is None:
+        print('Warning: Material ' + material['name'] + ' references missing parameter ' + material['shader'] + '.' + param['name'])
+    return input
+
+
+# Main function
 def load(operator, context, filepath='', **kwargs):
     # Parse MDB
     with open(filepath, 'rb') as f:
@@ -360,14 +370,49 @@ def load(operator, context, filepath='', **kwargs):
     # Create materials
     materials = []
     for mdb_material in mdb['materials']:
+        lshader = mdb_material['shader'].lower()
         material = bpy.data.materials.new(mdb_material['name'])
-        material.blend_method = 'HASHED'
+        if lshader.endswith('_alpha') or lshader.endswith('_hair'):
+            material.blend_method = 'HASHED'
         material.use_nodes = True
-        bsdf = material.node_tree.nodes['Principled BSDF']
-        bsdf.inputs['Roughness'].default_value = 1.0 # Remove shine
+        mat_nodes = material.node_tree
+        bsdf = mat_nodes.nodes['Principled BSDF']
+        mat_nodes.nodes.remove(bsdf)
         unhandled = 0
+
+        mat_out = mat_nodes.nodes['Material Output']
+        shader_node = material.node_tree.nodes.new('ShaderNodeGroup')
+        shader_node.node_tree = shader.get_shader(mdb_material['shader'])
+        shader_node.show_options = False
+        shader_node.width = 240
+        shader_node.location[1] = mat_out.location[1]
+        mat_nodes.links.new(mat_out.inputs['Surface'], shader_node.outputs['Surface'])
+
+        # Set up material parameters
+        for param in mdb_material['params']:
+            if param['size'] == 1:
+                input_node = warnparam(shader_node.inputs.get(param['name']), mdb_material, param)
+                if input_node is not None:
+                    input_node.default_value = param['val0']
+            elif param['size'] == 2:
+                input_x = warnparam(shader_node.inputs.get(param['name'] + '_x'), mdb_material, param)
+                if input_x is not None:
+                    input_y = shader_node.inputs.get(param['name'] + '_y')
+                    input_x.default_value = param['val0']
+                    input_y.default_value = param['val1']
+            elif param['size'] == 4:
+                input_col = warnparam(shader_node.inputs.get(param['name']), mdb_material, param)
+                if input_col is not None:
+                    input_alpha = shader_node.inputs.get(param['name'] + '_alpha')
+                    input_col.default_value = (param['val0'], param['val1'], param['val2'], 1)
+                    # It's okay for alpha to be missing, there are no parameters of size 3
+                    if input_alpha is not None:
+                        input_alpha.default_value = param['val3']
+
+        # Add all material textures
         for texture in mdb_material['textures']:
-            texImage = material.node_tree.nodes.new('ShaderNodeTexImage')
+            txr_map = texture['map']
+            texImage = mat_nodes.nodes.new('ShaderNodeTexImage')
             filename = mdb['textures'][texture['texture']]['filename']
             if filename in textures:
                 texImage.image = textures[filename]
@@ -376,8 +421,9 @@ def load(operator, context, filepath='', **kwargs):
                     image = bpy.data.images.load(os.path.join(os.path.dirname(filepath), '..', 'HD-TEXTURE', filename))
                     texImage.image = image
                     textures[filename] = image
-                    if texture['map'] == 'normal':
+                    if 'albedo' not in txr_map and 'diffuse' not in txr_map:
                         image.colorspace_settings.name = 'Non-Color'
+                    if txr_map == 'normal' or txr_map == 'damage_normal':
                         np_pxl = np.empty(len(image.pixels), dtype=np.float32)
                         image.pixels.foreach_get(np_pxl)
                         np_pxl.shape = (len(image.pixels) // image.channels, image.channels)
@@ -393,27 +439,27 @@ def load(operator, context, filepath='', **kwargs):
                         image.pixels.foreach_set(np_pxl)
                 except RuntimeError as e: # Ignore texture import error
                     print(e)
-            if texture['map'] == 'albedo':
-                texImage.location[0] = bsdf.location[0] - 300
-                texImage.location[1] = bsdf.location[1] - 80
-                material.node_tree.links.new(bsdf.inputs['Base Color'], texImage.outputs['Color'])
-                material.node_tree.links.new(bsdf.inputs['Alpha'], texImage.outputs['Alpha'])
-            elif texture['map'] == 'normal':
-                if texImage.image is not None:
-                    texImage.image.colorspace_settings.name = 'Non-Color'
-                texImage.location[0] = bsdf.location[0] - 500
-                texImage.location[1] = bsdf.location[1] - 510
 
-                # Connect normal map
-                normalMap = material.node_tree.nodes.new('ShaderNodeNormalMap')
-                normalMap.location[0] = bsdf.location[0] - 200
-                normalMap.location[1] = bsdf.location[1] - 510
-                material.node_tree.links.new(normalMap.inputs['Color'], texImage.outputs['Color'])
-                material.node_tree.links.new(bsdf.inputs['Normal'], normalMap.outputs['Normal'])
-            else:
-                texImage.location[0] = bsdf.location[0] - 700 + unhandled * 40
-                texImage.location[1] = bsdf.location[1] - unhandled * 40
-                unhandled += 1
+            texImage.location[0] = shader_node.location[0] - 700 + unhandled * 40
+            texImage.location[1] = shader_node.location[1] - unhandled * 40
+            unhandled += 1
+            input_col = shader_node.inputs.get(txr_map)
+            if input_col is not None:
+                if txr_map == 'normal' or txr_map == 'damage_normal':
+                    normalMap = mat_nodes.nodes.new('ShaderNodeNormalMap')
+                    normalMap.location[0] = shader_node.location[0] - 200
+                    mat_nodes.links.new(normalMap.inputs['Color'], texImage.outputs['Color'])
+                    mat_nodes.links.new(input_col, normalMap.outputs['Normal'])
+                else:
+                    input_alpha = shader_node.inputs.get(txr_map + '_alpha')
+                    mat_nodes.links.new(input_col, texImage.outputs['Color'])
+                    if input_alpha is not None:
+                        mat_nodes.links.new(input_alpha, texImage.outputs['Alpha'])
+
+        # Deselect all nodes
+        for node in mat_nodes.nodes:
+            node.select = False
+
         materials.append(material)
 
     # Add armature and bones
