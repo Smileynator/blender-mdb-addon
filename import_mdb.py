@@ -90,15 +90,15 @@ def parse_bones(f, count, offset):
         bone['unk5'] = f.read(1)[0]
         bone['unk6'] = f.read(1)[0] == 1
         f.read(5) # Always zero
-        
+
         bone['mat1'] = read_matrix(f)
         bone['mat2'] = read_matrix(f)
-        
+
         bone['unk7'] = read_float(f)
         bone['unk8'] = read_float(f)
         bone['unk9'] = read_float(f)
         f.read(4) # Always 1.0
-        
+
         bone['unk10'] = read_float(f)
         bone['unk11'] = read_float(f)
         bone['unk12'] = read_float(f)
@@ -466,7 +466,7 @@ def load(operator, context, filepath='', **kwargs):
     armature = bpy.data.armatures.new('Armature')
     armature_obj = bpy.data.objects.new(os.path.splitext(os.path.basename(filename))[0], armature)
     context.scene.collection.objects.link(armature_obj)
-    
+
     context.view_layer.objects.active = armature_obj
     bpy.ops.object.mode_set(mode='EDIT', toggle=False)
     edit_bones = armature.edit_bones
@@ -479,7 +479,7 @@ def load(operator, context, filepath='', **kwargs):
             bone.parent = bones[mdb_bone['parent']]
         # TODO: Everything.
     bpy.ops.object.mode_set(mode='OBJECT')
-    
+
     # Add meshes
     for object in mdb['objects']:
         name = object['name']
@@ -520,7 +520,7 @@ def load(operator, context, filepath='', **kwargs):
                     normals.append((x, -z, y))
                 mesh.normals_split_custom_set_from_vertices(normals)
                 mesh.use_auto_smooth = True # Enable custom normals
-            
+
             # TODO: Binormals and tangents?
 
             # Add UV map
