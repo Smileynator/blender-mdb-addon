@@ -5,8 +5,8 @@ shaders = {
 ('light0_color', 'float3', (4.0, 0.5, 0.5)),
 ('light1_color', 'float3', (0.5, 0.5, 2.0)),
 ('alpha', 'float', 1.0),
-('light0_tex', 'texture'),
-('light1_tex', 'texture')
+('light0_tex', 'texture', 1),
+('light1_tex', 'texture', 2)
 ],
 'snd_Chara_2ColorChange': [
 ('diffuse', 'float3', (1.0, 1.0, 1.0)),
@@ -83,7 +83,7 @@ shaders = {
 ('albedo', 'texture'),
 ('normal', 'normal'),
 ('param_reflect_specpow_specint_occ', 'texture_alpha'),
-('param_light_mask', 'texture'),
+('param_light_mask', 'texture', 1),
 ('damage_dist', 'texture'),
 ('damage_diffuse', 'texture'),
 ('damage_normal', 'normal')
@@ -296,8 +296,8 @@ shaders = {
 ('albedo', 'texture'),
 ('normal', 'normal'),
 ('param_reflect_spec_light0mask_hlight0mask', 'texture_alpha'),
-('light0_scroll', 'texture'),
-('param_occ_XXX_XXX_XXX', 'texture')
+('light0_scroll', 'texture', 1),
+('param_occ_XXX_XXX_XXX', 'texture', 2)
 ],
 'snd_Dino_LightScroll_damage': [
 ('scroll_light0', 'float2', (0.0, 0.0)),
@@ -324,8 +324,8 @@ shaders = {
 ('albedo', 'texture'),
 ('normal', 'normal'),
 ('param_reflect_spec_light0mask_hlight0mask', 'texture_alpha'),
-('light0_scroll', 'texture'),
-('param_occ_XXX_XXX_XXX', 'texture'),
+('light0_scroll', 'texture', 1),
+('param_occ_XXX_XXX_XXX', 'texture', 2),
 ('damage_dist', 'texture'),
 ('damage_diffuse', 'texture'),
 ('damage_normal', 'normal')
@@ -345,9 +345,9 @@ shaders = {
 ('dirt_adjust', 'float', 0.8),
 ('albedo', 'texture'),
 ('normal', 'normal'),
-('dirt', 'texture_alpha'),
+('dirt', 'texture_alpha', 2),
 ('param_reflect_cm0_spec_hspec', 'texture_alpha'),
-('param_occlusion', 'texture')
+('param_occlusion', 'texture', 1)
 ],
 'snd_Map_Build_Basic_NC': [
 ('diffuse', 'float3', (1.0, 1.0, 1.0)),
@@ -363,9 +363,9 @@ shaders = {
 ('dirt_adjust', 'float', 0.8),
 ('albedo', 'texture'),
 ('normal', 'normal'),
-('dirt', 'texture_alpha'),
+('dirt', 'texture_alpha', 2),
 ('param_reflect_XXX_spec_hspec', 'texture_alpha'),
-('param_occlusion', 'texture')
+('param_occlusion', 'texture', 1)
 ],
 'snd_Map_Build_Basic_Parallax_NC': [
 ('diffuse', 'float3', (1.0, 1.0, 1.0)),
@@ -383,9 +383,9 @@ shaders = {
 ('parallax_dent', 'float', 1.0),
 ('albedo', 'texture'),
 ('normal', 'normal'),
-('dirt', 'texture_alpha'),
+('dirt', 'texture_alpha', 2),
 ('param_reflect_XXX_height_spec', 'texture_alpha'),
-('param_occlusion', 'texture')
+('param_occlusion', 'texture', 1)
 ],
 'snd_Map_Build_DirtScroll': [
 ('dirt_scale', 'float', 1.0),
@@ -403,9 +403,9 @@ shaders = {
 ('dirt_adjust', 'float', 0.8),
 ('albedo', 'texture'),
 ('normal', 'normal'),
-('dirt', 'texture_alpha'),
+('dirt', 'texture_alpha', 2),
 ('param_reflect_cm0_spec_hspec', 'texture_alpha'),
-('param_occlusion', 'texture')
+('param_occlusion', 'texture', 1)
 ],
 'snd_Map_Build_DirtScroll_NC': [
 ('dirt_scale', 'float', 1.0),
@@ -422,9 +422,9 @@ shaders = {
 ('dirt_adjust', 'float', 0.8),
 ('albedo', 'texture'),
 ('normal', 'normal'),
-('dirt', 'texture_alpha'),
+('dirt', 'texture_alpha', 2),
 ('param_reflect_XXX_spec_hspec', 'texture_alpha'),
-('param_occlusion', 'texture')
+('param_occlusion', 'texture', 1)
 ],
 'snd_Map_Build_DirtScroll_Parallax_NC': [
 ('dirt_scale', 'float', 1.0),
@@ -443,9 +443,9 @@ shaders = {
 ('parallax_dent', 'float', 1.0),
 ('albedo', 'texture'),
 ('normal', 'normal'),
-('dirt', 'texture_alpha'),
+('dirt', 'texture_alpha', 2),
 ('param_reflect_XXX_height_spec', 'texture_alpha'),
-('param_occlusion', 'texture')
+('param_occlusion', 'texture', 1)
 ],
 'snd_Map_Build_Light_NC': [
 ('diffuse', 'float3', (1.0, 1.0, 1.0)),
@@ -462,9 +462,9 @@ shaders = {
 ('dirt_adjust', 'float', 0.8),
 ('albedo', 'texture'),
 ('normal', 'normal'),
-('dirt', 'texture_alpha'),
+('dirt', 'texture_alpha', 2),
 ('param_reflect_light_spec_hspec', 'texture_alpha'),
-('param_occlusion', 'texture')
+('param_occlusion', 'texture', 1)
 ],
 'snd_Map_Build_NoOcc': [
 ('diffuse', 'float3', (1.0, 1.0, 1.0)),
@@ -480,7 +480,7 @@ shaders = {
 ('dirt_adjust', 'float', 0.8),
 ('albedo', 'texture'),
 ('normal', 'normal'),
-('dirt', 'texture_alpha'),
+('dirt', 'texture_alpha', 1),
 ('param_reflect_XXX_spec_hspec', 'texture_alpha')
 ],
 'snd_Map_Build_Simple': [
@@ -515,7 +515,7 @@ shaders = {
 ('albedo', 'texture_alpha'),
 ('normal', 'normal'),
 ('param_reflect_XXX_spec_hspec', 'texture_alpha'),
-('param_occlusion', 'texture')
+('param_occlusion', 'texture', 1)
 ],
 'snd_Map_Build_Simple_Clip': [
 ('diffuse', 'float3', (1.0, 1.0, 1.0)),
@@ -532,7 +532,7 @@ shaders = {
 ('albedo', 'texture_alpha'),
 ('normal', 'normal'),
 ('param_reflect_XXX_spec_hspec', 'texture_alpha'),
-('param_occlusion', 'texture')
+('param_occlusion', 'texture', 1)
 ],
 'snd_Map_Build_Window': [
 ('window_normal_uv_scale', 'float2', (1.0, 1.0)),
@@ -549,9 +549,9 @@ shaders = {
 ('fall_off_scale', 'float', 1.0),
 ('fall_off_offset', 'float', 0.0),
 ('window_frame_texture', 'texture_alpha'),
-('interior_texture', 'texture'),
+('interior_texture', 'texture', 1),
 ('normal', 'normal'),
-('window_normal', 'normal'),
+('window_normal', 'normal', 2),
 ('param_reflect_XXX_spec_hspec', 'texture_alpha')
 ],
 'snd_Map_Cave_NoOcc': [
@@ -574,7 +574,7 @@ shaders = {
 ('dirt_adjust', 'float', 0.8),
 ('albedo', 'texture'),
 ('normal', 'normal'),
-('dirt', 'texture_alpha'),
+('dirt', 'texture_alpha', 1),
 ('param_reflect_XXX_spec_hspec', 'texture_alpha')
 ],
 'snd_Map_Field_Basic': [
@@ -586,7 +586,7 @@ shaders = {
 ('dirt_adjust', 'float', 0.8),
 ('albedo', 'texture'),
 ('normal', 'normal'),
-('dirt', 'texture_alpha'),
+('dirt', 'texture_alpha', 1),
 ('param_XXX_XXX_spec_hspec', 'texture_alpha')
 ],
 'snd_Map_Field_Parallax': [
@@ -600,7 +600,7 @@ shaders = {
 ('parallax_dent', 'float', 0.5),
 ('albedo', 'texture'),
 ('normal', 'normal'),
-('dirt', 'texture_alpha'),
+('dirt', 'texture_alpha', 1),
 ('param_XXX_height_spec_hspec', 'texture_alpha')
 ],
 'snd_Map_LOD': [
@@ -656,7 +656,7 @@ shaders = {
 ('albedo', 'texture'),
 ('normal', 'normal'),
 ('param_reflect_cm0_spec_hspec', 'texture_alpha'),
-('param_occlusion', 'texture')
+('param_occlusion', 'texture', 1)
 ],
 'snd_Map_Object_Glass': [
 ('diffuse', 'float4', (1.0, 1.0, 1.0, 1.0)),
@@ -724,7 +724,7 @@ shaders = {
 ('dirt_adjust', 'float', 0.8),
 ('albedo', 'texture'),
 ('normal', 'normal'),
-('dirt', 'texture_alpha'),
+('dirt', 'texture_alpha', 1),
 ('param_reflect_cm0_spec_hspec', 'texture_alpha')
 ],
 'snd_Map_Object_NoAO_Light': [
@@ -742,7 +742,7 @@ shaders = {
 ('albedo', 'texture'),
 ('normal', 'normal'),
 ('param_reflect_spec_lightmask_hlightmask', 'texture_alpha'),
-('param_occlusion', 'texture')
+('param_occlusion', 'texture', 1)
 ],
 'snd_Map_Object_NoCC': [
 ('diffuse', 'float3', (1.0, 1.0, 1.0)),
@@ -758,7 +758,7 @@ shaders = {
 ('albedo', 'texture'),
 ('normal', 'normal'),
 ('param_reflect_XXX_spec_hspec', 'texture_alpha'),
-('param_occlusion', 'texture')
+('param_occlusion', 'texture', 1)
 ],
 'snd_Map_Object_NoCCAO': [
 ('diffuse', 'float3', (1.0, 1.0, 1.0)),
@@ -826,11 +826,11 @@ shaders = {
 ('metallic', 'float', 0.0),
 ('roughness', 'float', 0.0),
 ('normal_map1', 'normal'),
-('normal_map2', 'normal'),
-('normal_map3', 'normal'),
+('normal_map2', 'normal', 1),
+('normal_map3', 'normal', 2),
 ('parallax_map1', 'texture'),
-('parallax_map2', 'texture'),
-('parallax_map3', 'texture'),
+('parallax_map2', 'texture', 1),
+('parallax_map3', 'texture', 2),
 ('bubble_albedo', 'texture')
 ],
 'snd_Mech': [
@@ -847,7 +847,7 @@ shaders = {
 ('albedo', 'texture'),
 ('normal', 'normal'),
 ('param_reflect_spec_XXX_hspec', 'texture_alpha'),
-('param_occ_XXX_XXX_XXX', 'texture')
+('param_occ_XXX_XXX_XXX', 'texture', 1)
 ],
 'snd_Mech_Catapillar': [
 ('scroll_texture', 'float2', (0.0, 0.0)),
@@ -865,7 +865,7 @@ shaders = {
 ('albedo', 'texture_alpha'),
 ('normal', 'normal'),
 ('param_reflect_spec_XXX_XXX', 'texture'),
-('param_occlusion', 'texture')
+('param_occlusion', 'texture', 1)
 ],
 'snd_Mech_Light': [
 ('diffuse', 'float3', (1.0, 1.0, 1.0)),
@@ -882,7 +882,7 @@ shaders = {
 ('albedo', 'texture'),
 ('normal', 'normal'),
 ('param_reflect_spec_lightmask_hlightmask', 'texture_alpha'),
-('param_occlusion', 'texture')
+('param_occlusion', 'texture', 1)
 ],
 'snd_Mech_Light_damage': [
 ('diffuse', 'float3', (1.0, 1.0, 1.0)),
@@ -908,7 +908,7 @@ shaders = {
 ('albedo', 'texture'),
 ('normal', 'normal'),
 ('param_reflect_spec_lightmask_hlightmask', 'texture_alpha'),
-('param_occlusion', 'texture'),
+('param_occlusion', 'texture', 1),
 ('damage_dist', 'texture'),
 ('damage_diffuse', 'texture'),
 ('damage_normal', 'normal')
@@ -936,7 +936,7 @@ shaders = {
 ('albedo', 'texture'),
 ('normal', 'normal'),
 ('param_reflect_spec_XXX_hspec', 'texture_alpha'),
-('param_occ_XXX_XXX_XXX', 'texture'),
+('param_occ_XXX_XXX_XXX', 'texture', 1),
 ('damage_dist', 'texture'),
 ('damage_diffuse', 'texture'),
 ('damage_normal', 'normal')
@@ -979,7 +979,7 @@ shaders = {
 ('albedo', 'texture'),
 ('normal', 'normal'),
 ('param_reflect_spec_XXX_hspec', 'texture_alpha'),
-('param_occ_XXX_XXX_XXX', 'texture')
+('param_occ_XXX_XXX_XXX', 'texture', 1)
 ],
 'snd_UFO_LightScroll': [
 ('scroll_light0', 'float2', (0.0, 0.0)),
@@ -997,7 +997,7 @@ shaders = {
 ('albedo', 'texture'),
 ('normal', 'normal'),
 ('param_reflect_spec_light0mask_hlight0mask', 'texture_alpha'),
-('light0_scroll', 'texture')
+('light0_scroll', 'texture', 1)
 ],
 'snd_UFO_LightScroll2_alpha': [
 ('scroll_light0', 'float2', (0.0, 0.0)),
@@ -1020,8 +1020,8 @@ shaders = {
 ('albedo', 'texture_alpha'),
 ('normal', 'normal'),
 ('param_reflect_spec_light0mask_hlight0mask', 'texture_alpha'),
-('light0_scroll', 'texture'),
-('light1_scroll', 'texture')
+('light0_scroll', 'texture', 1),
+('light1_scroll', 'texture', 2)
 ],
 'snd_UFO_LightScroll2_alpha_damage': [
 ('scroll_light0', 'float2', (0.0, 0.0)),
@@ -1051,8 +1051,8 @@ shaders = {
 ('albedo', 'texture_alpha'),
 ('normal', 'normal'),
 ('param_reflect_spec_light0mask_hlight0mask', 'texture_alpha'),
-('light0_scroll', 'texture'),
-('light1_scroll', 'texture'),
+('light0_scroll', 'texture', 1),
+('light1_scroll', 'texture', 2),
 ('damage_dist', 'texture'),
 ('damage_diffuse', 'texture_alpha'),
 ('damage_normal', 'normal')
@@ -1082,7 +1082,7 @@ shaders = {
 ('albedo', 'texture'),
 ('normal', 'normal'),
 ('param_reflect_spec_light0mask_hlight0mask', 'texture_alpha'),
-('light0_scroll', 'texture'),
+('light0_scroll', 'texture', 1),
 ('damage_dist', 'texture'),
 ('damage_diffuse', 'texture'),
 ('damage_normal', 'normal')
@@ -1097,14 +1097,14 @@ shaders = {
 ('color0', 'float4', (1.0, 1.0, 1.0, 1.0)),
 ('prog_control_color', 'float4', (1.0, 1.0, 1.0, 1.0)),
 ('albedo0', 'texture_alpha'),
-('albedo1', 'texture_alpha')
+('albedo1', 'texture_alpha', 1)
 ],
 'snd_UI_GaugeBar': [
 ('color', 'float4', (1.0, 1.0, 1.0, 1.0)),
 ('prog_control_color', 'float4', (1.0, 1.0, 1.0, 1.0)),
 ('threshold', 'float', 1.0),
 ('albedo', 'texture_alpha'),
-('bar_mask', 'texture')
+('bar_mask', 'texture', 1)
 ],
 'snd_UI_HSVGradiant': [
 ('color', 'float4', (1.0, 1.0, 1.0, 1.0)),
@@ -1140,9 +1140,9 @@ shaders = {
 ('uv_scroll0', 'float2', (0.0, 0.0)),
 ('uv_scroll1', 'float2', (0.0, 0.0)),
 ('albedo0', 'texture_alpha'),
-('mask0', 'texture'),
-('albedo1', 'texture_alpha'),
-('mask1', 'texture')
+('mask0', 'texture', 1),
+('albedo1', 'texture_alpha', 2),
+('mask1', 'texture', 3)
 ],
 'snd_e511_Unit_Surface': [
 ('diffuse', 'float3', (1.0, 1.0, 1.0)),

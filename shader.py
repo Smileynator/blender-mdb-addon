@@ -1,7 +1,8 @@
 import bpy
 
-from . import shader_data
-shader_data = shader_data.shaders
+from .shader_data import shaders as shader_data
+
+shader_cache={}
 
 class Shader:
     def __init__(self, shader):
@@ -14,6 +15,7 @@ class Shader:
         self.shader_tree = shader_tree
         self.group_inputs = group_inputs
         self.split_map = {}
+        self.param_map = {}
 
         if shader in shader_data:
             params={}
@@ -23,17 +25,23 @@ class Shader:
             self.multi_tex = multi_tex
             for param in shader_data[shader]:
                 pname, ptype = param[:2]
+                self.param_map[pname] = param
                 if 'param_' in pname and (ptype == 'texture' or ptype == 'texture_alpha'):
-                    comps = pname[pname.find('param_')+6:].split('_')
-                    for i in range(min(len(comps), 4)):
-                        if i == 0:
-                            multi_tex[comps[i]]=(pname, 'R')
-                        elif i == 1:
-                            multi_tex[comps[i]]=(pname, 'G')
-                        elif i == 2:
-                            multi_tex[comps[i]]=(pname, 'B')
-                        elif i == 3 and ptype == 'texture_alpha':
-                            multi_tex[comps[i]]=(pname + '_alpha')
+                    if pname == 'param_light_mask':
+                        multi_tex['lightmask']=(pname, 'R')
+                    else:
+                        comps = pname[pname.find('param_')+6:].split('_')
+                        for i in range(min(len(comps), 4)):
+                            if comps[i] == 'XXX':
+                                continue
+                            elif i == 0:
+                                multi_tex[comps[i]]=(pname, 'R')
+                            elif i == 1:
+                                multi_tex[comps[i]]=(pname, 'G')
+                            elif i == 2:
+                                multi_tex[comps[i]]=(pname, 'B')
+                            elif i == 3 and ptype == 'texture_alpha':
+                                multi_tex[comps[i]]=(pname + '_alpha')
 
             # Setup all shader parameters
             for param in shader_data[shader]:
@@ -113,13 +121,13 @@ class Shader:
 
             # Setup alpha input
             alpha_input=None
-            if params.get('diffuse') == 'texture_alpha' and params.get('albedo') == 'texture_alpha':
+            if params.get('diffuse') == 'float4' and params.get('albedo') == 'texture_alpha':
                 alpha_mul = shader_tree.nodes.new('ShaderNodeMath')
                 alpha_mul.operation = 'MULTIPLY'
                 shader_tree.links.new(alpha_mul.inputs[0], group_inputs.outputs['diffuse_alpha'])
-                shader_tree.links.new(alpha_mul.inputs[0], group_inputs.outputs['albedo_alpha'])
+                shader_tree.links.new(alpha_mul.inputs[1], group_inputs.outputs['albedo_alpha'])
                 alpha_input = alpha_mul.outputs['Value']
-            elif params.get('diffuse') == 'texture_alpha':
+            elif params.get('diffuse') == 'float4':
                 alpha_input = group_inputs.outputs['diffuse_alpha']
             elif params.get('albedo') == 'texture_alpha':
                 alpha_input = group_inputs.outputs['albedo_alpha']
@@ -175,9 +183,9 @@ class Shader:
         return self.split_map[tex_comp[0]].outputs[tex_comp[1]]
 
 
-def get_shader(shader):
-    shader_tree = bpy.data.node_groups.get(shader)
-    if shader_tree is not None:
-        return shader_tree
-    shader = Shader(shader)
-    return shader.shader_tree
+def get_shader(shader_name):
+    if shader_name in shader_cache:
+        return shader_cache[shader_name]
+    shader = Shader(shader_name)
+    shader_cache[shader_name] = shader
+    return shader

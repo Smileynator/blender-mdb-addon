@@ -7,7 +7,8 @@ import numpy as np
 
 from struct import pack, unpack
 
-from . import shader
+from .shader import Shader, get_shader
+
 
 # Read helper functions
 def read_ushort(file):
@@ -382,7 +383,8 @@ def load(operator, context, filepath='', **kwargs):
 
         mat_out = mat_nodes.nodes['Material Output']
         shader_node = material.node_tree.nodes.new('ShaderNodeGroup')
-        shader_node.node_tree = shader.get_shader(mdb_material['shader'])
+        shader = get_shader(mdb_material['shader'])
+        shader_node.node_tree = shader.shader_tree
         shader_node.show_options = False
         shader_node.width = 240
         shader_node.location[1] = mat_out.location[1]
@@ -455,6 +457,13 @@ def load(operator, context, filepath='', **kwargs):
                     mat_nodes.links.new(input_col, texImage.outputs['Color'])
                     if input_alpha is not None:
                         mat_nodes.links.new(input_alpha, texImage.outputs['Alpha'])
+                param = shader.param_map[txr_map]
+                if len(param) >= 3:
+                    uvmap = mat_nodes.nodes.new('ShaderNodeUVMap')
+                    uvmap.location[0] = texImage.location[0] - 200
+                    uvmap.location[1] = texImage.location[1] - 200
+                    uvmap.uv_map = 'UVMap' + str(param[2]+1)
+                    mat_nodes.links.new(texImage.inputs['Vector'], uvmap.outputs['UV'])
 
         # Deselect all nodes
         for node in mat_nodes.nodes:
@@ -524,15 +533,15 @@ def load(operator, context, filepath='', **kwargs):
             # TODO: Binormals and tangents?
 
             # Add UV map
-            if 'texcoord0' in vertices[0]:
-                uvmap = mesh.uv_layers.new(name='UVMap')
-                for face in mesh.polygons:
-                    for vert_idx, loop_idx in zip(face.vertices, face.loop_indices):
-                        texcoord = vertices[vert_idx]['texcoord0']
-                        uvmap.data[loop_idx].uv[0] = texcoord[0]
-                        uvmap.data[loop_idx].uv[1] = 1.0 - texcoord[1]
-
-            # TODO: Import texcoord1?
+            for i in range(4):
+                coordstr = 'texcoord' + str(i)
+                if coordstr in vertices[0]:
+                    uvmap = mesh.uv_layers.new(name='UVMap' + ('' if i == 0 else str(i+1)))
+                    for face in mesh.polygons:
+                        for vert_idx, loop_idx in zip(face.vertices, face.loop_indices):
+                            texcoord = vertices[vert_idx][coordstr]
+                            uvmap.data[loop_idx].uv[0] = texcoord[0]
+                            uvmap.data[loop_idx].uv[1] = 1.0 - texcoord[1]
 
             # Add vertex groups
             if 'BLENDWEIGHT0' in vertices[0]:
