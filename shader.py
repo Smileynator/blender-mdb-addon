@@ -41,7 +41,7 @@ class Shader:
                             elif i == 2:
                                 multi_tex[comps[i]]=(pname, 'B')
                             elif i == 3 and ptype == 'texture_alpha':
-                                multi_tex[comps[i]]=(pname + '_alpha')
+                                multi_tex[comps[i]]=(pname + '_alpha',)
 
             # Setup all shader parameters
             for param in shader_data[shader]:
@@ -141,7 +141,14 @@ class Shader:
                 light_mul.blend_type = 'MULTIPLY'
                 light_mul.inputs['Fac'].default_value = 1
                 shader_tree.links.new(light_mul.inputs['Color1'], group_inputs.outputs['light_color'])
-                shader_tree.links.new(light_mul.inputs['Color2'], self.get_or_split('lightmask'))
+                if 'hlightmask' in multi_tex:
+                    mask_mul = shader_tree.nodes.new('ShaderNodeMath')
+                    mask_mul.operation = 'MULTIPLY'
+                    shader_tree.links.new(mask_mul.inputs[0], self.get_or_split('lightmask'))
+                    shader_tree.links.new(mask_mul.inputs[1], self.get_or_split('hlightmask'))
+                    shader_tree.links.new(light_mul.inputs['Color2'], mask_mul.outputs['Value'])
+                else:
+                    shader_tree.links.new(light_mul.inputs['Color2'], self.get_or_split('lightmask'))
                 light_input = light_mul.outputs['Color']
             elif 'light_color' in params:
                 light_input = group_inputs.outputs['light_color']
