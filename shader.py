@@ -191,7 +191,7 @@ class Shader:
 
 
 def get_shader(shader_name):
-    if shader_name in shader_cache:
+    if shader_name in shader_cache and shader_name in bpy.data.node_groups:
         return shader_cache[shader_name]
     shader = Shader(shader_name)
     shader_cache[shader_name] = shader
