@@ -375,15 +375,20 @@ def load(operator, context, filepath='', **kwargs):
         material = bpy.data.materials.new(mdb_material['name'])
         if lshader.endswith('_alpha') or lshader.endswith('_hair'):
             material.blend_method = 'HASHED'
+        elif lshader.endswith('_clip'):
+            material.blend_method = 'CLIP'
         material.use_nodes = True
         mat_nodes = material.node_tree
         bsdf = mat_nodes.nodes['Principled BSDF']
         mat_nodes.nodes.remove(bsdf)
         unhandled = 0
 
+        shader = get_shader(mdb_material['shader'])
+        if shader.has_alpha and material.blend_method == 'OPAQUE':
+            material.blend_method = 'HASHED'
+
         mat_out = mat_nodes.nodes['Material Output']
         shader_node = material.node_tree.nodes.new('ShaderNodeGroup')
-        shader = get_shader(mdb_material['shader'])
         shader_node.node_tree = shader.shader_tree
         shader_node.show_options = False
         shader_node.width = 240
@@ -423,6 +428,8 @@ def load(operator, context, filepath='', **kwargs):
                     image = bpy.data.images.load(os.path.join(os.path.dirname(filepath), '..', 'HD-TEXTURE', filename))
                     texImage.image = image
                     textures[filename] = image
+                    # Why is Straight being treated as Premultiplied by cycles?
+                    image.alpha_mode = 'CHANNEL_PACKED'
                     if 'albedo' not in txr_map and 'diffuse' not in txr_map:
                         image.colorspace_settings.name = 'Non-Color'
                     if txr_map == 'normal' or txr_map == 'damage_normal':

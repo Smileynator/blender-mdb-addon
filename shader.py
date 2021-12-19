@@ -2,6 +2,9 @@ import bpy
 
 from .shader_data import shaders as shader_data
 
+# TODO: This has some issues
+# On new scene the shader_tree becomes invalid
+# On .blend load the shader_tree is invalid, and the old node groups still exist
 shader_cache={}
 
 class Shader:
@@ -133,6 +136,7 @@ class Shader:
                 alpha_input = group_inputs.outputs['albedo_alpha']
             if alpha_input is not None:
                 shader_tree.links.new(bsdf.inputs['Alpha'], alpha_input)
+            self.has_alpha = alpha_input is not None
 
             # Setup emissive light
             light_input=None
@@ -191,8 +195,11 @@ class Shader:
 
 
 def get_shader(shader_name):
-    if shader_name in shader_cache and shader_name in bpy.data.node_groups:
-        return shader_cache[shader_name]
+    if shader_name in shader_cache:
+        shader = shader_cache[shader_name]
+        # How to properly check if the node group is still valid?
+        if not str(shader.shader_tree).endswith(' invalid>'):
+            return shader
     shader = Shader(shader_name)
     shader_cache[shader_name] = shader
     return shader
