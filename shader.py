@@ -23,6 +23,7 @@ class Shader:
         multi_tex={}
         self.multi_tex = multi_tex
         self.has_alpha = False
+        self.facing = None
 
         if shader in shader_data:
             params={}
@@ -88,6 +89,20 @@ class Shader:
             bsdf.location[0] = 200
             shader_tree.links.new(group_outputs.inputs['Surface'], bsdf.outputs['BSDF'])
 
+            # Connect simple inputs
+            self.normal = None
+            if 'normal' in params:
+                self.normal = group_inputs.outputs['normal']
+            elif 'damage_normal' in params:
+                self.normal = group_inputs.outputs['damage_normal']
+            if self.normal is not None:
+                shader_tree.links.new(bsdf.inputs['Normal'], self.normal)
+
+            if 'metallic' in params:
+                shader_tree.links.new(bsdf.inputs['Metallic'], group_inputs.outputs['metallic'])
+            if 'roughness' in params:
+                shader_tree.links.new(bsdf.inputs['Roughness'], group_inputs.outputs['roughness'])
+
             # Setup shader color chain
             color_input=None
             if 'diffuse' in params and 'albedo' in params:
@@ -125,18 +140,29 @@ class Shader:
                 shader_tree.links.new(bsdf.inputs['Base Color'], color_input)
 
             # Setup alpha input
-            alpha_input=None
-            if params.get('diffuse') == 'float4' and params.get('albedo') == 'texture_alpha':
+            alpha_input = None
+            diffuse_alpha = None
+            if params.get('diffuse') == 'float4':
+                diffuse_alpha = 'diffuse_alpha'
+            elif params.get('alpha') == 'float':
+                diffuse_alpha = 'alpha'
+            if diffuse_alpha is not None and params.get('albedo') == 'texture_alpha':
                 alpha_mul = shader_tree.nodes.new('ShaderNodeMath')
                 alpha_mul.operation = 'MULTIPLY'
-                shader_tree.links.new(alpha_mul.inputs[0], group_inputs.outputs['diffuse_alpha'])
+                shader_tree.links.new(alpha_mul.inputs[0], group_inputs.outputs[diffuse_alpha])
                 shader_tree.links.new(alpha_mul.inputs[1], group_inputs.outputs['albedo_alpha'])
                 alpha_input = alpha_mul.outputs['Value']
-            elif params.get('diffuse') == 'float4':
-                alpha_input = group_inputs.outputs['diffuse_alpha']
+            elif diffuse_alpha is not None:
+                alpha_input = group_inputs.outputs[diffuse_alpha]
             elif params.get('albedo') == 'texture_alpha':
                 alpha_input = group_inputs.outputs['albedo_alpha']
             if alpha_input is not None:
+                if 'translucent_fall_off_offset' in params:
+                    tfo_mul = shader_tree.nodes.new('ShaderNodeMath')
+                    tfo_mul.operation = 'MULTIPLY'
+                    shader_tree.links.new(tfo_mul.inputs[0], alpha_input)
+                    shader_tree.links.new(tfo_mul.inputs[1], self.gen_edge_chain('translucent_'))
+                    alpha_input = tfo_mul.outputs['Value']
                 shader_tree.links.new(bsdf.inputs['Alpha'], alpha_input)
             self.has_alpha = alpha_input is not None
 
@@ -159,23 +185,19 @@ class Shader:
             elif 'light_color' in params:
                 light_input = group_inputs.outputs['light_color']
             if light_input is not None:
+                if 'light_fall_off_offset' in params:
+                    lfo_mul = shader_tree.nodes.new('ShaderNodeMixRGB')
+                    lfo_mul.blend_type = 'MULTIPLY'
+                    lfo_mul.inputs['Fac'].default_value = 1
+                    shader_tree.links.new(lfo_mul.inputs['Color1'], light_input)
+                    shader_tree.links.new(lfo_mul.inputs['Color2'], self.gen_edge_chain('light_'))
+                    light_input = lfo_mul.outputs['Color']
                 shader_tree.links.new(bsdf.inputs['Emission'], light_input)
 
             # Reflections
             if 'reflect' in multi_tex:
                 shader_tree.links.new(bsdf.inputs['Specular'], self.get_or_split('reflect'))
             # TODO: How to handle specular?
-
-            # Connect simple inputs
-            if 'normal' in params:
-                shader_tree.links.new(bsdf.inputs['Normal'], group_inputs.outputs['normal'])
-            elif 'damage_normal' in params:
-                shader_tree.links.new(bsdf.inputs['Normal'], group_inputs.outputs['damage_normal'])
-
-            if 'metallic' in params:
-                shader_tree.links.new(bsdf.inputs['Metallic'], group_inputs.outputs['metallic'])
-            if 'roughness' in params:
-                shader_tree.links.new(bsdf.inputs['Roughness'], group_inputs.outputs['roughness'])
         else:
             print('Warning: MDB uses unknown shader ' + shader)
 
@@ -193,6 +215,24 @@ class Shader:
             self.shader_tree.links.new(img_split.inputs['Image'], self.group_inputs.outputs[tex_comp[0]])
         return self.split_map[tex_comp[0]].outputs[tex_comp[1]]
 
+    def gen_edge_chain(self, prefix):
+        if self.facing is None:
+            layer_weight = self.shader_tree.nodes.new('ShaderNodeLayerWeight')
+            layer_weight.inputs['Blend'].default_value = 0.05
+            if self.normal is not None:
+                self.shader_tree.links.new(layer_weight.inputs['Normal'], self.normal)
+            self.facing = layer_weight.outputs['Facing']
+
+        scale_mul = self.shader_tree.nodes.new('ShaderNodeMath')
+        scale_mul.operation = 'MULTIPLY'
+        self.shader_tree.links.new(scale_mul.inputs[0], self.facing)
+        self.shader_tree.links.new(scale_mul.inputs[1], self.group_inputs.outputs[prefix + 'fall_off_scale'])
+
+        offset_add = self.shader_tree.nodes.new('ShaderNodeMath')
+        offset_add.operation = 'ADD'
+        self.shader_tree.links.new(offset_add.inputs[0], scale_mul.outputs['Value'])
+        self.shader_tree.links.new(offset_add.inputs[1], self.group_inputs.outputs[prefix + 'fall_off_offset'])
+        return offset_add.outputs['Value']
 
 def get_shader(shader_name):
     if shader_name in shader_cache:
