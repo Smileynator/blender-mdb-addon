@@ -15,17 +15,19 @@ class Shader:
         group_outputs = shader_tree.nodes.new('NodeGroupOutput')
         group_outputs.location[0] = 500
         shader_tree.outputs.new('NodeSocketShader', 'Surface')
+
         self.shader_tree = shader_tree
         self.group_inputs = group_inputs
         self.split_map = {}
         self.param_map = {}
+        multi_tex={}
+        self.multi_tex = multi_tex
+        self.has_alpha = False
 
         if shader in shader_data:
             params={}
 
             # Map out multi purpose textures
-            multi_tex={}
-            self.multi_tex = multi_tex
             for param in shader_data[shader]:
                 pname, ptype = param[:2]
                 self.param_map[pname] = param
@@ -180,8 +182,6 @@ class Shader:
         # Deselect all nodes
         for node in shader_tree.nodes:
             node.select = False
-
-        self.shader_tree = shader_tree
 
     def get_or_split(self, comp):
         tex_comp = self.multi_tex[comp]
