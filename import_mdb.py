@@ -530,9 +530,11 @@ def load(operator, context, filepath='', **kwargs):
             if 'normal0' in vertices[0]:
                 normals = []
                 for vert in vertices:
-                    x = vert['normal0'][0]
-                    y = vert['normal0'][1]
-                    z = vert['normal0'][2]
+                    normal = vert['normal0'].astype(float)
+                    normal /= np.sqrt(normal[0]*normal[0]+normal[1]*normal[1]+normal[2]*normal[2])
+                    x = normal[0]
+                    y = normal[1]
+                    z = normal[2]
                     normals.append((x, -z, y))
                 mesh.normals_split_custom_set_from_vertices(normals)
                 mesh.use_auto_smooth = True # Enable custom normals
