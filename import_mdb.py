@@ -10,6 +10,9 @@ from struct import pack, unpack
 from .shader import new_socket, Shader, get_shader
 
 
+bone_up_Y = mathutils.Matrix.Rotation(np.pi/2, 4, 'X')
+
+
 # Read helper functions
 def read_ushort(file):
     return unpack('<H', file.read(2))[0]
@@ -48,11 +51,10 @@ def read_wstr(file):
 
 
 def read_matrix(file):
-    # TODO: Possibly wrong order?
     mat = mathutils.Matrix()
     for y in range(4):
         for x in range(4):
-            mat[y][x] = read_float(file)
+            mat[x][y] = read_float(file)
     return mat
 
 # Parsing functions
@@ -574,10 +576,13 @@ def load(operator, context, filepath='', **kwargs):
     for mdb_bone in mdb['bones']:
         bone = edit_bones.new(mdb['names'][mdb_bone['index']])
         bone.tail.z = 0.2
-        bones.append(bone)
         if mdb_bone['parent'] >= 0:
             bone.parent = bones[mdb_bone['parent']]
-        # TODO: Everything.
+            bone.matrix = bone.parent.matrix @ mdb_bone['mat1'];
+        else:
+            bone.matrix = bone_up_Y @ mdb_bone['mat1']
+        bones.append(bone)
+
     bpy.ops.object.mode_set(mode='OBJECT')
 
     # Add meshes

@@ -3,7 +3,6 @@ Incomplete blender importer/exporter for Earth Defense Force 4.1 & 5's .mdb file
 Supported versions of blender are 2.90 to 4.0.2, newer versions not guaranteed.
 
 Only importing is currently supported, and only partially.  
-Bones are currently not imported at all.  
 All textures are imported, but only albedo and normal textures are connected to materials.
 
 ## Download
