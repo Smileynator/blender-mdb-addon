@@ -2,10 +2,24 @@ import bpy
 
 from .shader_data import shaders as shader_data
 
+IS_BPY_V3 = bpy.app.version < (4, 0, 0)
+
 # TODO: This has some issues
 # On new scene the shader_tree becomes invalid
 # On .blend load the shader_tree is invalid, and the old node groups still exist
 shader_cache={}
+
+def new_socket(node_tree, name, in_out, socket_type):
+    global IS_BPY_V3
+    if IS_BPY_V3:
+        if in_out == 'INPUT':
+            node_tree.inputs.new(socket_type, name)
+        elif in_out == 'OUTPUT':
+            node_tree.outputs.new(socket_type, name)
+        else:
+            raise TypeError(f'new_socket(): error with argument in_out - "{in_out}" not "INPUT" or "OUTPUT"')
+    else:
+        node_tree.interface.new_socket(name, description='', in_out=in_out, socket_type=socket_type)
 
 class Shader:
     def __init__(self, shader):
@@ -14,7 +28,7 @@ class Shader:
         group_inputs.location[0] = -200
         group_outputs = shader_tree.nodes.new('NodeGroupOutput')
         group_outputs.location[0] = 500
-        shader_tree.outputs.new('NodeSocketShader', 'Surface')
+        new_socket(shader_tree, 'Surface', 'OUTPUT', 'NodeSocketShader')
 
         self.shader_tree = shader_tree
         self.group_inputs = group_inputs
@@ -55,34 +69,34 @@ class Shader:
                 params[pname]=ptype
                 # Add inputs to shader
                 if ptype == 'normal':
-                    shader_tree.inputs.new('NodeSocketVector', pname)
+                    new_socket(shader_tree, pname, 'INPUT', 'NodeSocketVector')
                 elif ptype == 'float4' or ptype == 'texture_alpha':
-                    shader_tree.inputs.new('NodeSocketColor', pname)
-                    shader_tree.inputs.new('NodeSocketFloat', pname + '_alpha')
-                    shader_tree.inputs[pname].default_value = (1, 1, 1, 1)
-                    shader_tree.inputs[pname + '_alpha'].default_value = 1
+                    new_socket(shader_tree, pname, 'INPUT', 'NodeSocketColor')
+                    new_socket(shader_tree, pname + '_alpha', 'INPUT', 'NodeSocketFloat')
+                    group_inputs.outputs[pname].default_value = (1, 1, 1, 1)
+                    group_inputs.outputs[pname + '_alpha'].default_value = 1
                 elif ptype == 'float3' or ptype == 'texture':
-                    shader_tree.inputs.new('NodeSocketColor', pname)
-                    shader_tree.inputs[pname].default_value = (1, 1, 1, 1)
+                    new_socket(shader_tree, pname, 'INPUT', 'NodeSocketColor')
+                    group_inputs.outputs[pname].default_value = (1, 1, 1, 1)
                 elif ptype == 'float2':
-                    shader_tree.inputs.new('NodeSocketFloat', pname + '_x')
-                    shader_tree.inputs.new('NodeSocketFloat', pname + '_y')
+                    new_socket(shader_tree, pname + '_x', 'INPUT', 'NodeSocketFloat')
+                    new_socket(shader_tree, pname + '_y', 'INPUT', 'NodeSocketFloat')
                 elif ptype == 'float':
-                    shader_tree.inputs.new('NodeSocketFloat', pname)
+                    new_socket(shader_tree, pname, 'INPUT', 'NodeSocketFloat')
 
                 # Set up proper defaults
                 if len(param) > 2:
                     default = param[2]
                     if ptype == 'float4':
-                        shader_tree.inputs[pname].default_value = (*default[:3], 1)
-                        shader_tree.inputs[pname + '_alpha'].default_value = default[3]
+                        group_inputs.outputs[pname].default_value = (*default[:3], 1)
+                        group_inputs.outputs[pname + '_alpha'].default_value = default[3]
                     elif ptype == 'float3':
-                        shader_tree.inputs[pname].default_value = (*default, 1)
+                        group_inputs.outputs[pname].default_value = (*default, 1)
                     elif ptype == 'float2':
-                        shader_tree.inputs[pname + '_x'].default_value = default[0]
-                        shader_tree.inputs[pname + '_y'].default_value = default[1]
+                        group_inputs.outputs[pname + '_x'].default_value = default[0]
+                        group_inputs.outputs[pname + '_y'].default_value = default[1]
                     elif ptype == 'float':
-                        shader_tree.inputs[pname].default_value = default
+                        group_inputs.outputs[pname].default_value = default
 
             # TODO: Connect inputs to various actual shaders
             bsdf = shader_tree.nodes.new('ShaderNodeBsdfPrincipled')
@@ -196,7 +210,8 @@ class Shader:
 
             # Reflections
             if 'reflect' in multi_tex:
-                shader_tree.links.new(bsdf.inputs['Specular'], self.get_or_split('reflect'))
+                specular_input = 'Specular' if IS_BPY_V3 else 'Specular IOR Level'
+                shader_tree.links.new(bsdf.inputs[specular_input], self.get_or_split('reflect'))
             # TODO: How to handle specular?
         else:
             print('Warning: MDB uses unknown shader ' + shader)

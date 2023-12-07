@@ -1,5 +1,6 @@
 # Blender MDB Addon
-Incomplete blender importer/exporter for Earth Defense Force 4.1 & 5's .mdb files
+Incomplete blender importer/exporter for Earth Defense Force 4.1 & 5's .mdb files.  
+Supported versions of blender are 2.90 to 4.0.2, newer versions not guaranteed.
 
 Only importing is currently supported, and only partially.  
 Bones are currently not imported at all.  

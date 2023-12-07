@@ -7,7 +7,7 @@ import numpy as np
 
 from struct import pack, unpack
 
-from .shader import Shader, get_shader
+from .shader import new_socket, Shader, get_shader
 
 
 # Read helper functions
@@ -375,8 +375,8 @@ def load(operator, context, filepath='', **kwargs):
 
         group_inputs = unswizzle.nodes.new('NodeGroupInput')
         group_inputs.location[0] = nspace * 0
-        unswizzle.inputs.new('NodeSocketColor', 'Color')
-        unswizzle.inputs.new('NodeSocketFloat', 'Alpha')
+        new_socket(unswizzle, 'Color', 'INPUT', 'NodeSocketColor')
+        new_socket(unswizzle, 'Alpha', 'INPUT', 'NodeSocketFloat')
 
         splitRGB = unswizzle.nodes.new('ShaderNodeSeparateRGB')
         splitRGB.location[0] = nspace * 1
@@ -454,7 +454,7 @@ def load(operator, context, filepath='', **kwargs):
 
         group_outputs = unswizzle.nodes.new('NodeGroupOutput')
         group_outputs.location[0] = nspace * 11
-        unswizzle.outputs.new('NodeSocketColor', 'Color')
+        new_socket(unswizzle, 'Color', 'OUTPUT', 'NodeSocketColor')
         unswizzle.links.new(group_outputs.inputs['Color'], combineRGB.outputs['Image'])
 
     # Create materials

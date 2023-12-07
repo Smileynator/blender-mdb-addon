@@ -1,7 +1,7 @@
 bl_info = {
     "name": "MDB format",
     "author": "BlueAmulet",
-    "version": (1, 0, 9),
+    "version": (1, 0, 10),
     "blender": (2, 90, 0),
     "location": "File > Import-Export",
     "description": "Import-Export MDB, mesh, UV's, materials and textures",
