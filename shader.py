@@ -206,7 +206,8 @@ class Shader:
                     shader_tree.links.new(lfo_mul.inputs['Color1'], light_input)
                     shader_tree.links.new(lfo_mul.inputs['Color2'], self.gen_edge_chain('light_'))
                     light_input = lfo_mul.outputs['Color']
-                shader_tree.links.new(bsdf.inputs['Emission'], light_input)
+                emission_input = 'Emission' if IS_BPY_V3 else 'Emission Color'
+                shader_tree.links.new(bsdf.inputs[emission_input], light_input)
 
             # Reflections
             if 'reflect' in multi_tex:
