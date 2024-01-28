@@ -578,14 +578,14 @@ def load(operator, context, filepath='', **kwargs):
     for mdb_bone in mdb['bones']:
         # Create bone with name
         bone = edit_bones.new(mdb_bone['name'])
+        # No length would mean they get removed for some reason, so we give it a fixed non zero length
+        bone.length = 0.25
         # Apply the transform matrix of the bone and parent
         if mdb_bone['parent'] >= 0:
             bone.parent = bones[mdb_bone['parent']]
             bone.matrix = bone.parent.matrix @ mdb_bone['matrix_local']
         else:
             bone.matrix = bone_up_Y @ mdb_bone['matrix_local']
-        # No length would mean they get removed for some reason, so we give it one
-        bone.length = 0.25
         # Add bone to bone list
         bones.append(bone)
 
