@@ -331,7 +331,7 @@ def parse_objects(f, count, offset, name_table):
 def parse_mdb(f):
     mdb = {}
     f.seek(0)
-    file_sig = f.read(4)
+    magic = f.read(4)
     version = read_uint(f)
     name_count = read_uint(f)
     name_offset = read_uint(f)
@@ -344,7 +344,7 @@ def parse_mdb(f):
     texture_count = read_uint(f)
     texture_offset = read_uint(f)
 
-    assert file_sig == b'MDB0'
+    assert magic == b'MDB0'
     assert version == 0x14
 
     mdb['names'] = parse_names(f, name_count, name_offset)
