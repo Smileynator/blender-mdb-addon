@@ -110,32 +110,8 @@ def parse_bones(f, count, offset, name_table):
         next = f.tell()
         assert next - base == 192
 
-        #PRINT DEBUG INFO
-        '''print(bone['name']+" - Index: "+ str(i)+" ---------")
-        print("Unknown 4 - "+str(bone['unk4']))
-        print("Unknown 5 - "+str(bone['unk5']))
-        print("Valid? 6 - "+str(bone['connect']))
-        print("Unknown 7 - "+str(bone['unk7']))
-        print("Unknown 8 - "+str(bone['unk8']))
-        print("Unknown 9 - "+str(bone['unk9'])+"\n")
-        print("Unknown 10 - "+str(bone['unk10']))
-        print("Unknown 11 - "+str(bone['unk11']))
-        print("Unknown 12 - "+str(bone['unk12'])+"\n")'''
-
         f.seek(next)
         bones.append(bone)
-
-    
-    # Group names under unk4 and unk5
-    '''for i in range(256):
-        for bone in bones:
-            if bone['unk4'] == i:
-                print("unk4 - "+str(i)+" "+bone['name'])
-    print("")
-    for i in range(256):
-        for bone in bones:
-            if bone['unk5'] == i:
-                print("unk5 - "+str(i)+" "+bone['name'])'''
         
     return bones
 
