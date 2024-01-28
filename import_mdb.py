@@ -6,10 +6,9 @@ import mathutils
 import numpy as np
 
 from struct import pack, unpack
-
 from .shader import new_socket, Shader, get_shader
 
-
+# Original model is Y UP, but blender is Z UP by default, we convert that here.
 bone_up_Y = mathutils.Matrix.Rotation(np.pi/2, 4, 'X')
 
 
@@ -76,41 +75,68 @@ def parse_names(f, count, offset):
     return names
 
 
-def parse_bones(f, count, offset):
+def parse_bones(f, count, offset, name_table):
     bones = []
     f.seek(offset)
     for i in range(count):
         bone = {}
         base = f.tell()
-        # TODO
-        bone['index'] = read_uint(f)
-        bone['parent'] = read_int(f)
-        bone['unk1'] = read_int(f)
-        bone['unk2'] = read_int(f)
-        bone['index2'] = read_uint(f) # Unused?
-        bone['unk3'] = read_uint(f)
-        bone['unk4'] = f.read(1)[0]
-        bone['unk5'] = f.read(1)[0]
-        bone['unk6'] = f.read(1)[0] == 1
-        f.read(5) # Always zero
+        
+        bone['index'] = read_uint(f) # Bone Index
+        bone['parent'] = read_int(f) # Parent index -1 for none.
+        bone['next_sibling'] = read_int(f) # Next Sibling index -1 for none.
+        bone['first_child'] = read_int(f) # First Child index -1 for none.
+        bone['name'] = name_table[read_uint(f)] # Bone name
+        bone['child_count'] = read_uint(f) # Child bone count
+        bone['unk4'] = f.read(1)[0] # Unknown byte Control Group? generally low value 0=root, 1=???, 2=unskinnedBone, 3=skinnedbone
+        bone['unk5'] = f.read(1)[0] # Unknown byte value 0, 1, 2(camera aim) 4(aim point), 250-255 as values, groupings consistent between models but still unclear
+        bone['connect'] = f.read(1)[0] == 1 # Bool, true if unk7 to 12 are used! Only false so far for empty/target nodes
+        f.read(5) # Always zero - 8 byte padding
 
-        bone['mat1'] = read_matrix(f)
-        bone['mat2'] = read_matrix(f)
+        bone['matrix_local'] = read_matrix(f) # Transformation Matrix local
+        bone['matrix_invbind'] = read_matrix(f) # Transformation Matrix Invert Bind Pose
 
-        bone['unk7'] = read_float(f)
+        # If one is set, the other is always set as well
+        bone['unk7'] = read_float(f) # Float4 Contact positions? Set for "actual bones" but 0 for "aim point" bones?
         bone['unk8'] = read_float(f)
         bone['unk9'] = read_float(f)
         f.read(4) # Always 1.0
 
-        bone['unk10'] = read_float(f)
+        bone['unk10'] = read_float(f) # Unknown Float4? Set for "actual bones" but 0 for "aim point" bones?
         bone['unk11'] = read_float(f)
         bone['unk12'] = read_float(f)
         f.read(4) # Always 1.0
+        
         next = f.tell()
         assert next - base == 192
 
+        #PRINT DEBUG INFO
+        '''print(bone['name']+" - Index: "+ str(i)+" ---------")
+        print("Unknown 4 - "+str(bone['unk4']))
+        print("Unknown 5 - "+str(bone['unk5']))
+        print("Valid? 6 - "+str(bone['connect']))
+        print("Unknown 7 - "+str(bone['unk7']))
+        print("Unknown 8 - "+str(bone['unk8']))
+        print("Unknown 9 - "+str(bone['unk9'])+"\n")
+        print("Unknown 10 - "+str(bone['unk10']))
+        print("Unknown 11 - "+str(bone['unk11']))
+        print("Unknown 12 - "+str(bone['unk12'])+"\n")'''
+
         f.seek(next)
         bones.append(bone)
+
+    
+    # Group names under unk4 and unk5
+    '''for i in range(256):
+        for bone in bones:
+            if bone['unk4'] == i:
+                print("unk4 - "+str(i)+" "+bone['name'])
+    print("")
+    for i in range(256):
+        for bone in bones:
+            if bone['unk5'] == i:
+                print("unk5 - "+str(i)+" "+bone['name'])'''
+        
     return bones
 
 
@@ -253,6 +279,7 @@ def parse_vertices(f, count, offset, layout, vertex_size):
         for j in range(len(layout)):
             elem = layout[j]
             array = []
+            # Figure out vertex type, and set array with content
             type = elem['type']
             if type == 1: #float4
                 array = unpack("ffff", f.read(16))
@@ -328,7 +355,7 @@ def parse_objects(f, count, offset, name_table):
 def parse_mdb(f):
     mdb = {}
     f.seek(0)
-    magic = f.read(4)
+    file_sig = f.read(4)
     version = read_uint(f)
     name_count = read_uint(f)
     name_offset = read_uint(f)
@@ -341,11 +368,11 @@ def parse_mdb(f):
     texture_count = read_uint(f)
     texture_offset = read_uint(f)
 
-    assert magic == b'MDB0'
+    assert file_sig == b'MDB0'
     assert version == 0x14
 
     mdb['names'] = parse_names(f, name_count, name_offset)
-    mdb['bones'] = parse_bones(f, bone_count, bone_offset)
+    mdb['bones'] = parse_bones(f, bone_count, bone_offset, mdb['names'])
     mdb['textures'] = parse_textures(f, texture_count, texture_offset)
     mdb['materials'] = parse_materials(f, material_count, material_offset, mdb['names'])
     mdb['objects'] = parse_objects(f, object_count, object_offset, mdb['names'])
@@ -568,20 +595,32 @@ def load(operator, context, filepath='', **kwargs):
     armature = bpy.data.armatures.new('Armature')
     armature_obj = bpy.data.objects.new(os.path.splitext(os.path.basename(filename))[0], armature)
     context.scene.collection.objects.link(armature_obj)
-
     context.view_layer.objects.active = armature_obj
     bpy.ops.object.mode_set(mode='EDIT', toggle=False)
     edit_bones = armature.edit_bones
     bones = []
     for mdb_bone in mdb['bones']:
-        bone = edit_bones.new(mdb['names'][mdb_bone['index']])
-        bone.tail.z = 0.2
+        # Create bone with name
+        bone = edit_bones.new(mdb_bone['name'])
+        # Apply the transform matrix of the bone and parent
         if mdb_bone['parent'] >= 0:
             bone.parent = bones[mdb_bone['parent']]
-            bone.matrix = bone.parent.matrix @ mdb_bone['mat1'];
+            bone.matrix = bone.parent.matrix @ mdb_bone['matrix_local']
         else:
-            bone.matrix = bone_up_Y @ mdb_bone['mat1']
+            bone.matrix = bone_up_Y @ mdb_bone['matrix_local']
+        # No length would mean they get removed for some reason, so we give it one
+        bone.length = 0.25
+        # Add bone to bone list
         bones.append(bone)
+
+    for index, bone in enumerate(bones):
+        # Set connect status of the bone, doing this to 0 length bones will make them disappear
+        # This makes artist eyes bleed less (If there are issues with bones, comment this out!)
+        mdb_bone = mdb['bones'][index]
+        if mdb_bone['parent'] >= 0 and mdb_bone['connect']:
+            distance = (bone.head - bone.parent.head).length
+            if distance != 0 and bone.parent.head != mathutils.Vector((0.0, 0.0, 0.0)):
+                bone.use_connect = True
 
     bpy.ops.object.mode_set(mode='OBJECT')
 
@@ -628,9 +667,9 @@ def load(operator, context, filepath='', **kwargs):
                 mesh.normals_split_custom_set_from_vertices(normals)
                 mesh.use_auto_smooth = True # Enable custom normals
 
-            # TODO: Binormals and tangents?
+            # TODO: Binormals and tangents? Seems this is calculated from UV maps?
 
-            # Add UV map
+            # Add UV maps
             for i in range(4):
                 coordstr = 'texcoord' + str(i)
                 if coordstr in vertices[0]:
@@ -645,7 +684,7 @@ def load(operator, context, filepath='', **kwargs):
             if 'BLENDWEIGHT0' in vertices[0]:
                 groups = []
                 for n in range(len(mdb['bones'])):
-                    groups.append(mesh_obj.vertex_groups.new(name=mdb['names'][n])) # TODO: Bone name
+                    groups.append(mesh_obj.vertex_groups.new(name=mdb['bones'][n]['name']))
                 for i, vert in enumerate(vertices):
                     for n in range(4):
                         if vert['BLENDWEIGHT0'][n] != 0:

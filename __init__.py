@@ -1,10 +1,10 @@
 bl_info = {
     "name": "MDB format",
     "author": "BlueAmulet",
-    "version": (1, 1, 1),
+    "version": (1, 1, 2),
     "blender": (2, 90, 0),
     "location": "File > Import-Export",
-    "description": "Import-Export MDB, mesh, UV's, materials and textures",
+    "description": "Import-Export MDB, mesh, UV's, materials and textures from Earth Defense Force",
     "warning": "",
     #"doc_url": "",
     "support": 'COMMUNITY',
