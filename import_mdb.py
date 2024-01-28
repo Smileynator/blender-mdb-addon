@@ -613,15 +613,6 @@ def load(operator, context, filepath='', **kwargs):
         # Add bone to bone list
         bones.append(bone)
 
-    for index, bone in enumerate(bones):
-        # Set connect status of the bone, doing this to 0 length bones will make them disappear
-        # This makes artist eyes bleed less (If there are issues with bones, comment this out!)
-        mdb_bone = mdb['bones'][index]
-        if mdb_bone['parent'] >= 0 and mdb_bone['connect']:
-            distance = (bone.head - bone.parent.head).length
-            if distance != 0 and bone.parent.head != mathutils.Vector((0.0, 0.0, 0.0)):
-                bone.use_connect = True
-
     bpy.ops.object.mode_set(mode='OBJECT')
 
     # Add meshes
@@ -667,7 +658,7 @@ def load(operator, context, filepath='', **kwargs):
                 mesh.normals_split_custom_set_from_vertices(normals)
                 mesh.use_auto_smooth = True # Enable custom normals
 
-            # TODO: Binormals and tangents? Seems this is calculated from UV maps?
+            # TODO: Binormals and tangents?
 
             # Add UV maps
             for i in range(4):
