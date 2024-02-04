@@ -149,11 +149,12 @@ def parse_mat_param(f, count, offset):
         mat_param['val1'] = read_float(f)
         mat_param['val2'] = read_float(f)
         mat_param['val3'] = read_float(f)
-        f.read(8) # Always zero
+        mat_param['val4'] = read_float(f)
+        mat_param['val5'] = read_float(f)
         name = read_uint(f)
-        mat_param['unk'] = f.read(1)[0]
-        mat_param['size'] = f.read(1)[0]
-        f.read(2) # Always zero
+        mat_param['type'] = f.read(1)[0] # Type (0 is value, 1 is Vector2, 2 is color, 3 is alpha color, 4+ ?)
+        mat_param['size'] = f.read(1)[0] # Number of values used in type
+        f.read(2) # Always zero, padding
         next = f.tell()
         assert next - base == 32
 
