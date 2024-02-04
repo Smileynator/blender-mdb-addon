@@ -2,6 +2,8 @@ import bpy
 import struct
 import pprint
 
+from .shader_data import shaders as shader_data
+
 
 def write_header(file, names, bones, objects, materials, textures):
     file.write(b'MDB0')
@@ -21,20 +23,17 @@ def write_header(file, names, bones, objects, materials, textures):
     # Object count and offset
     objects_length = len(objects)
     file.write(struct.pack('I', objects_length))
-    objectOffset = boneOffset + bone_length * 0xC0
-    file.write(struct.pack('I', objectOffset))
+    file.write(struct.pack('I', 0))
     
     # Material count and offset
     materials_length = len(materials)
     file.write(struct.pack('I', materials_length))
-    material_offset = objectOffset + objects_length * 0x10
-    file.write(struct.pack('I', material_offset))
+    file.write(struct.pack('I', 0))
     
     # Texture count and offset
     textures_length = len(textures)
     file.write(struct.pack('I', textures_length))
-    texture_offset = material_offset + textures_length * 0x10
-    file.write(struct.pack('I', texture_offset))
+    file.write(struct.pack('I', 0))
 
 
 def get_unique_names():
@@ -52,9 +51,10 @@ def get_unique_names():
     for material in bpy.data.materials:
         names.add(material.name)
         
-    for name in names:
-        print(name)
+    for index, name in enumerate(names):
+        print(f'String: {index} {name}')
     return list(names)
+
 
 def get_bone_data(names):
     bones = []
@@ -98,6 +98,7 @@ def get_bone_data(names):
         bones.append(bone_data)
     return bones
 
+
 # Writes all bone data, total size per bone 0xC0 (192)
 def write_bone_data(f, bones):
     for bone in bones:
@@ -131,6 +132,7 @@ def get_textures():
     return list(unique_textures)
 
 
+# Writes all texture data, total size per texture 0x10 (16)
 def write_texture_data(file, textures):
     for index, texture in enumerate(textures):
         # Index
@@ -141,6 +143,179 @@ def write_texture_data(file, textures):
         file.write(bytes([0x00]) * 4)
 
 
+def get_materials(textures):
+    materials = []
+    valid_materials = []
+    # Filter any material that are not recognized by shader_data
+    for material in bpy.data.materials:
+        if material.use_nodes:
+            found_shader_node = False
+            for node in material.node_tree.nodes:
+                if hasattr(node, 'inputs') and node.type == 'GROUP' and node.node_tree.name in shader_data:
+                    found_shader_node = True
+                    break
+            if found_shader_node:
+                valid_materials.append(material)
+            else:
+                print(f"Warning: Material {material.name} ignored for not having a shader node.")
+                    
+    # Process the valid materials
+    for index, material in enumerate(valid_materials):
+        material_data = {
+            'index': index,
+            'mat_name': material.name.encode('utf-16'),
+        }
+        parameters = []
+        texture_data = []
+        # Get all the inputs of the shader group as parameters
+        if material.use_nodes:
+            for node in material.node_tree.nodes:
+                # Filter the one group we are interested in
+                if hasattr(node, 'inputs') and node.type == 'GROUP' and node.node_tree.name in shader_data:
+                    material_data['shader_name'] = node.node_tree.name.encode('utf-16')
+                    for input in node.inputs:
+                        # Skip all "extra" inputs
+                        if input.name.endswith('_y') or input.name.endswith('_alpha'):
+                            continue
+                        if is_texture_node(node.node_tree.name, input.name):
+                            texture_data.append(get_texture(input, textures))
+                        else:
+                            parameters.append(get_parameter(node.inputs, input))
+                    break
+        material_data['parameters'] = parameters
+        material_data['parameter_count'] = len(parameters)
+        material_data['parameter_offset'] = 0
+        material_data['textures'] = texture_data
+        material_data['texture_count'] = len(texture_data)
+        material_data['texture_offset'] = 0
+        #TODO unknown values
+        materials.append(material_data)
+    return materials
+
+
+# Return true of this is a texture type parameter, hope there are no name clashes
+def is_texture_node(shader, input_name):
+    if shader in shader_data:
+        properties = shader_data[shader]
+        for prop in properties:
+            if prop[0] == input_name and prop[1] in ['normal', 'texture', 'texture_alpha']:
+                return True
+    else:
+        print(f"Warning: Shader {shader} not found!")
+    return False
+
+
+# Gets the parameters relevant data for this node input
+def get_parameter(all_inputs, input):
+    parameter_data = None
+    if input.name.endswith('_x'):
+        y_input = all_inputs[input.name.replace('_x', '_y')]
+        parameter_data = {
+            'name': input.name.rstrip('_x'),
+            'values': [input.default_value, y_input.default_value],
+            'type': 1, #Vector2 type
+            'size': 2
+        }
+    elif input.type == 'RGBA':
+        type = 2 #RGB type
+        values = [input.default_value[0], input.default_value[1], input.default_value[2]]
+        alpha_input = all_inputs.get(input.name+'_alpha', None)
+        if alpha_input is not None:
+            type = 3 #RGBA type
+            values.append(input.default_value[3])
+        parameter_data = {
+            'name': input.name,
+            'values': values,
+            'type': type,
+            'size': 4
+        }
+    elif input.type == 'VALUE':
+        parameter_data = {
+            'name': input.name,
+            'values': [input.default_value],
+            'type': 0, # Float type
+            'size': 1
+        }
+    else:
+        print(f"Unknown parameter type! Not exported! {input.name}, {input.type}")
+    # Pad params to 6 values, this makes writing easier
+    parameter_data['values'] = parameter_data['values'] + [0.0] * (6-len(parameter_data['values']))
+    return parameter_data
+
+
+# Gets the texture relevant data for this node input
+def get_texture(input, textures):
+    image_node = find_parent_texture_node(input)
+    texture_data = {
+        'texture_index': textures.index(image_node.image.name),
+        'type': input.name.encode('ascii'),
+        # TODO a lot of unknown data to be filled here
+    }
+    return texture_data
+
+
+# Recursively finds the source node which supplies the texture to this node input
+def find_parent_texture_node(input):
+    
+    for link in input.links:
+        if link.from_node.type == 'TEX_IMAGE':
+            return link.from_node
+        for input in link.from_node.inputs:
+            result = find_parent_texture_node(input)
+            if result:
+                return result
+
+
+# Writes all material data, total size per material 0x20 (32)
+def write_material_data(file, materials):
+    # Write the main material data
+    for material in materials:
+        material['base_pos'] = file.tell()
+        print(f'Writing material: {material["mat_name"]} at {material["base_pos"]}')
+        file.write(struct.pack('H', material['index']))
+        file.write(bytes([0x00]) * 2)   # unknown bytes
+        # Material name and Shader name offset placeholders
+        file.write(bytes([0x00]) * 8)
+        material['parameter_pos'] = file.tell()
+        file.write(struct.pack('i', 0))
+        file.write(struct.pack('i', material['parameter_count']))
+        material['texture_pos'] = file.tell()
+        file.write(struct.pack('i', 0))
+        file.write(struct.pack('i', material['texture_count']))
+        file.write(struct.pack('i', 0x03)) # Unknown but usually 3
+        
+    # Write the parameter and texture data per material
+    for material in materials:
+        # Parameters
+        parameters_pos = file.tell()
+        print(f'Writing parameters: {material["mat_name"]} at {parameters_pos}')
+        rewrite_offset(file, material['parameter_pos'], parameters_pos, material['base_pos'])
+        for parameter in material['parameters']:
+            parameter['base_pos'] = file.tell()
+            file.write(struct.pack('6f', *parameter['values']))
+            parameter['name_pos'] = file.tell()
+            file.write(struct.pack('i', 0))
+            file.write(struct.pack('B', parameter['type']))
+            file.write(struct.pack('B', parameter['size']))
+            file.write(bytes([0x00]) * 2)  # padding
+        # Textures
+        textures_pos = file.tell()
+        print(f'Writing textures: {material["mat_name"]} at {textures_pos}')
+        rewrite_offset(file, material['texture_pos'], textures_pos, material['base_pos'])
+        for texture in material['textures']:
+            texture['base_pos'] = file.tell()
+            file.write(struct.pack('i', texture['texture_index']))
+            texture['type_pos'] = file.tell()
+            file.write(struct.pack('i', 0))
+            file.write(bytes([0x00]) * 20)  # Unknown values
+
+
+def rewrite_offset(file, rewrite_target, current_position, target_base_offset):
+    file.seek(rewrite_target)
+    offset = current_position - target_base_offset
+    file.write(struct.pack('I', offset))
+    file.seek(current_position)
+
 def save(operator, context, filepath="", **kwargs):
     # Current assumption is that the whole scene is what you want to export
     
@@ -150,10 +325,12 @@ def save(operator, context, filepath="", **kwargs):
     bones = get_bone_data(names)
     # Get all textures used
     texture_names = get_textures()
+    # Get Material Data
+    materials = get_materials(texture_names)
+    # Get Object Data
+    objects = {}#TODO
     
     with open(filepath, 'wb') as file:
-        objects = {}
-        materials = {}
         
         # Write header
         write_header(file, names, bones, objects, materials, texture_names)
@@ -161,7 +338,17 @@ def save(operator, context, filepath="", **kwargs):
         file.write(bytes([0x01, 0x02, 0x03, 0x04]) * len(names))
         # Write Bone Data
         write_bone_data(file, bones)
+        # Write header Texture offset
+        rewrite_offset(file, 0x2C, file.tell(), 0x00)
         # Write Texture data
         write_texture_data(file, texture_names)
+        # Write header Material offset
+        rewrite_offset(file, 0x24, file.tell(), 0x00)
+        # Write Material data
+        write_material_data(file, materials)
+        # Write header Object offset
+        rewrite_offset(file, 0x1C, file.tell(), 0x00)
+        # Write Object data
+        # TODO
         
     return {'FINISHED'}
