@@ -1,6 +1,10 @@
+# MDB Exporter for Blender
+# Author: Smileynator
+
 import bpy
 import struct
 import pprint
+import numpy as np
 
 from .shader_data import shaders as shader_data
 
@@ -158,12 +162,13 @@ def get_materials(textures):
                 valid_materials.append(material)
             else:
                 print(f"Warning: Material {material.name} ignored for not having a shader node.")
-                    
+
     # Process the valid materials
     for index, material in enumerate(valid_materials):
         material_data = {
             'index': index,
             'mat_name': material.name.encode('utf-16'),
+            'blender_material': material,
         }
         parameters = []
         texture_data = []
@@ -256,7 +261,6 @@ def get_texture(input, textures):
 
 # Recursively finds the source node which supplies the texture to this node input
 def find_parent_texture_node(input):
-    
     for link in input.links:
         if link.from_node.type == 'TEX_IMAGE':
             return link.from_node
@@ -271,7 +275,7 @@ def write_material_data(file, materials):
     # Write the main material data
     for material in materials:
         material['base_pos'] = file.tell()
-        print(f'Writing material: {material["mat_name"]} at {material["base_pos"]}')
+        #print(f'Writing material: {material["mat_name"]} at {material["base_pos"]}')
         file.write(struct.pack('H', material['index']))
         file.write(bytes([0x00]) * 2)   # unknown bytes
         # Material name and Shader name offset placeholders
@@ -288,7 +292,7 @@ def write_material_data(file, materials):
     for material in materials:
         # Parameters
         parameters_pos = file.tell()
-        print(f'Writing parameters: {material["mat_name"]} at {parameters_pos}')
+        #print(f'Writing parameters: {material["mat_name"]} at {parameters_pos}')
         rewrite_offset(file, material['parameter_pos'], parameters_pos, material['base_pos'])
         for parameter in material['parameters']:
             parameter['base_pos'] = file.tell()
@@ -300,7 +304,7 @@ def write_material_data(file, materials):
             file.write(bytes([0x00]) * 2)  # padding
         # Textures
         textures_pos = file.tell()
-        print(f'Writing textures: {material["mat_name"]} at {textures_pos}')
+        #print(f'Writing textures: {material["mat_name"]} at {textures_pos}')
         rewrite_offset(file, material['texture_pos'], textures_pos, material['base_pos'])
         for texture in material['textures']:
             texture['base_pos'] = file.tell()
@@ -309,33 +313,275 @@ def write_material_data(file, materials):
             file.write(struct.pack('i', 0))
             file.write(bytes([0x00]) * 20)  # Unknown values
 
-
+# Seeks to the target, writes a file offset relative to the given base, returns to original position
 def rewrite_offset(file, rewrite_target, current_position, target_base_offset):
     file.seek(rewrite_target)
     offset = current_position - target_base_offset
     file.write(struct.pack('I', offset))
     file.seek(current_position)
 
-def save(operator, context, filepath="", **kwargs):
-    # Current assumption is that the whole scene is what you want to export
+
+# Gathers all objects and their underlying data
+def get_objects(names, materials):
+    objects = []
+    obj_index = 0
+    for obj in bpy.data.objects:
+        if obj.data is not None:
+            continue
+        object_data = {
+            'index': obj_index,
+            'name_index': names.index(obj.name),
+        }
+        # Get all meshes
+        mesh_objects = [child for child in obj.children if child.type == 'MESH']
+        object_data['mesh_count'] = len(mesh_objects)
+        object_data['mesh_data'] = []
+        for index, mesh_object in enumerate(mesh_objects):
+            object_data['mesh_data'].append(get_mesh_data(index, mesh_object, materials))
+
+        obj_index += 1
+        objects.append(object_data)
+    return objects
+
+
+# Gathers mesh info data
+def get_mesh_data(index, mesh_object, materials):
+    mesh = mesh_object.data
+    material_index = -1
+    # Get the material used for this mesh
+    for mat in materials:
+        if mesh.materials[0] == mat['blender_material']:
+            material_index = mat['index']
+            break
+    # Get max bone weights to a single vertex
+    bone_weights = 0
+    for vert in mesh.vertices:
+        current_weights = 0
+        for group in vert.groups:
+            if group.weight > 0:
+                current_weights += 1
+        if current_weights > bone_weights:
+            bone_weights = current_weights
+    is_skinned = any(mod.type == 'ARMATURE' for mod in mesh_object.modifiers)
+    mesh_data = {
+        'skinned_mesh': int(is_skinned),
+        'bones_per_vertex': bone_weights,
+        # TODO who wants to bet there is a 2nd material option at 0x08?
+        'material_index': material_index,
+        'vertices_count': len(mesh.vertices),
+        'mesh_index': index,
+        'vertices_data': get_vertices_data(mesh, is_skinned),
+        'indices_count': len(mesh.loops),
+        'indice_data': [loop.vertex_index for loop in mesh.loops],  # get vertex index from each loop to form indices
+    }
+    # Total data size per vertex?
+    data_size = 0
+    for data in mesh_data['vertices_data']:
+        data_size += data['size']
+    mesh_data['vertices_data_size'] = data_size
+    mesh_data['layout_count'] = len(mesh_data['vertices_data'])
+    return mesh_data
+
+# Gathers all the data per vertices and returns the object
+def get_vertices_data(mesh, is_skinned):
+    vertex_loops = {}
+    for loop in mesh.loops:
+        if loop.vertex_index not in vertex_loops:
+            vertex_loops[loop.vertex_index] = {}
+            vertex_loops[loop.vertex_index]['loops'] = []
+        vertex_loops[loop.vertex_index]['loops'].append(loop)
     
+    vertices_data = []
+    # Due to the nature of this data, it makes sense to just generate it as i saw in example files
+    # We cannot be certain for each of these if they exist or not until proven otherwise in practice
+    position_data = {
+        'name': 'position',
+        'type': 7,
+        'size': 8,
+        'channel': 0,
+        'data': []
+    }
+    vertices_data.append(position_data)
+    normal_data = {
+        'name': 'normal',
+        'type': 7,
+        'size': 8,
+        'channel': 0,
+        'data': []
+    }
+    vertices_data.append(normal_data)
+    binormal_data = {
+        'name': 'binormal',
+        'type': 7,
+        'size': 8,
+        'channel': 0,
+        'data': []
+    }
+    vertices_data.append(binormal_data)
+    tangent_data = {
+        'name': 'tangent',
+        'type': 7,
+        'size': 8,
+        'channel': 0,
+        'data': []
+    }
+    vertices_data.append(tangent_data)
+    if is_skinned:
+        blend_weight_data = {
+            'name': 'BLENDWEIGHT',
+            'type': 1,
+            'size': 16,
+            'channel': 0,
+            'data': []
+        }
+        vertices_data.append(blend_weight_data)
+        blend_indices_data = {
+            'name': 'BLENDINDICES',
+            'type': 21,
+            'size': 4,
+            'channel': 0,
+            'data': []
+        }
+        vertices_data.append(blend_indices_data)
+    # We store a UV array seperately just for easy access when looping over indices.
+    uv_data = []
+    for channel, uv in enumerate(mesh.uv_layers):
+        texcoord_data = {
+            'name': 'texcoord',
+            'type': 12,
+            'size': 8,
+            'channel': channel,
+            'data': []
+        }
+        uv_data.append(texcoord_data)
+        vertices_data.append(texcoord_data)
+    # Finally we go over all the vertices and populate the data arrays in each of the above data channels
+    uv_count = len(mesh.uv_layers)
+    for vert in mesh.vertices:
+        loop = vertex_loops[vert.index]['loops'][0] # Get the first loop this vertex is part of
+        position_data['data'].append([vert.co[0], vert.co[1], vert.co[2], 0.0])
+        normal_data['data'].append([vert.normal[0], vert.normal[1], vert.normal[2], 0.0])
+        # TODO figure out calculating binormal and tangent instead of taking first blindly
+        binormal_data['data'].append([loop.bitangent[0], loop.bitangent[1], loop.bitangent[2], 0.0])
+        tangent_data['data'].append([loop.tangent[0], loop.tangent[1], loop.tangent[2], 0.0])
+        # UVs
+        for i in range(uv_count):
+            uv_vector = mesh.uv_layers[i].data[loop.index].uv
+            uv_data[i]['data'].append([uv_vector[0], uv_vector[1]])
+        # Skinned mesh
+        if is_skinned:
+            weights = []
+            indices = []
+            for index, bone in enumerate(vert.groups):
+                if bone.weight > 0:
+                    weights.append(bone.weight)
+                    indices.append(index) #TODO incorrect?
+                    if len(weights) == 4:
+                        break # No need to keep looping, we got all 4 which is the maximum
+            while len(weights) < 4:
+                weights.append(0.0)
+                indices.append(0)
+            blend_weight_data['data'].append([weights[0], weights[1], weights[2], weights[3]])
+            blend_indices_data['data'].append([indices[0], indices[1], indices[2], indices[3]])
+    # Set offsets in data
+    offset = 0
+    for layout in vertices_data:
+        layout['offset'] = offset
+        offset += layout['size']
+    return vertices_data
+
+
+def write_object_data(file, objects):
+    for object in objects:
+        # Write object info
+        object['base_pos'] = file.tell()
+        file.write(struct.pack('I', object['index']))
+        file.write(struct.pack('i', object['name_index']))
+        file.write(struct.pack('I', object['mesh_count']))
+        object['mesh_pos'] = file.tell()
+        file.write(struct.pack('I', 0))
+    for object in objects:
+        # Replace mesh_pos in object data
+        rewrite_offset(file, object['mesh_pos'], file.tell(), object['base_pos'])
+        write_mesh_data(file, object)
+
+def write_mesh_data(file, object):
+    # Write Mesh info
+    for mesh in object['mesh_data']:
+        mesh['base_pos'] = file.tell()
+        file.write(bytes([0x00]))  # Unknown bool
+        file.write(struct.pack('B', mesh['skinned_mesh']))
+        file.write(struct.pack('B', mesh['bones_per_vertex']))
+        file.write(bytes([0x00]))  # Alignment
+        file.write(struct.pack('i', mesh['material_index']))
+        file.write(struct.pack('i', 0))  # Unknown value always 0?
+        mesh['vertex_layout_pos'] = file.tell()
+        file.write(struct.pack('i', 0))
+        file.write(struct.pack('H', mesh['vertices_data_size']))
+        file.write(struct.pack('H', mesh['layout_count']))
+        file.write(struct.pack('I', mesh['vertices_count']))
+        file.write(struct.pack('I', mesh['mesh_index']))
+        mesh['vertex_data_pos'] = file.tell()
+        file.write(struct.pack('i', 0))
+        file.write(struct.pack('I', mesh['indices_count']))
+        mesh['indice_data_pos'] = file.tell()
+        file.write(struct.pack('i', 0))
+    for mesh in object['mesh_data']:
+        # Replace vertex_layout_pos in mesh data
+        rewrite_offset(file, mesh['vertex_layout_pos'], file.tell(), mesh['base_pos'])
+        # Write Vertex Layer Info
+        for layout in mesh['vertices_data']:
+            layout['base_pos'] = file.tell()
+            file.write(struct.pack('I', layout['type']))
+            file.write(struct.pack('I', layout['offset']))
+            file.write(struct.pack('I', layout['channel']))
+            layout['name_pos'] = file.tell()
+            file.write(struct.pack('I', 0))
+    for mesh in object['mesh_data']:
+        # Replace indice_data_pos in mesh data
+        rewrite_offset(file, mesh['indice_data_pos'], file.tell(), mesh['base_pos'])
+        # Write all indices
+        for indice in mesh['indice_data']:
+            file.write(struct.pack('H', indice))
+    for mesh in object['mesh_data']:
+        # Replace vertex_data_pos in mesh data
+        rewrite_offset(file, mesh['vertex_data_pos'], file.tell(), mesh['base_pos'])
+        # Write all Vertex data
+        for i in range(mesh['vertices_count']):
+            for layout in mesh['vertices_data']:
+                type = layout['type']
+                vert_data = layout['data'][i]
+                if type == 1: #float4
+                    file.write(struct.pack('4f', *vert_data))
+                elif type == 4: #float3
+                    file.write(struct.pack('3f', *vert_data))
+                elif type == 7: #half4
+                    half_array = np.array(vert_data, dtype=np.float32).astype(np.half)
+                    file.write(half_array.tobytes())
+                elif type == 12: #float2
+                    file.write(struct.pack('2f', *vert_data))
+                elif type == 21: #ubyte4
+                    file.write(struct.pack('4B', *vert_data))
+                else:
+                    print("Unknown vertex layout type: " + str(type))
+            
+            
+
+
+def save(operator, context, filepath="", **kwargs):
     # Get the name table
-    names = get_unique_names()
-    # Get all bones in the rig(s)
-    bones = get_bone_data(names)
-    # Get all textures used
+    indexed_strings = get_unique_names()
+    # Gather all the different parts we need
+    bones = get_bone_data(indexed_strings)
     texture_names = get_textures()
-    # Get Material Data
     materials = get_materials(texture_names)
-    # Get Object Data
-    objects = {}#TODO
+    objects = get_objects(indexed_strings, materials)
     
     with open(filepath, 'wb') as file:
-        
         # Write header
-        write_header(file, names, bones, objects, materials, texture_names)
+        write_header(file, indexed_strings, bones, objects, materials, texture_names)
         # Write name pointers placeholder
-        file.write(bytes([0x01, 0x02, 0x03, 0x04]) * len(names))
+        file.write(bytes([0x01, 0x02, 0x03, 0x04]) * len(indexed_strings))
         # Write Bone Data
         write_bone_data(file, bones)
         # Write header Texture offset
@@ -349,6 +595,10 @@ def save(operator, context, filepath="", **kwargs):
         # Write header Object offset
         rewrite_offset(file, 0x1C, file.tell(), 0x00)
         # Write Object data
-        # TODO
+        write_object_data(file, objects)
+        # Write all strings
+        #write_strings(file, indexed_strings)
         
+        #TODO all the string replacement
+    #pprint.pprint(objects[0]['mesh_data'])
     return {'FINISHED'}

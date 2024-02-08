@@ -149,11 +149,12 @@ def parse_mat_param(f, count, offset):
         mat_param['val1'] = read_float(f)
         mat_param['val2'] = read_float(f)
         mat_param['val3'] = read_float(f)
-        f.read(8) # Always zero
+        mat_param['val4'] = read_float(f)
+        mat_param['val5'] = read_float(f)
         name = read_uint(f)
-        mat_param['unk'] = f.read(1)[0]
-        mat_param['size'] = f.read(1)[0]
-        f.read(2) # Always zero
+        mat_param['type'] = f.read(1)[0] #type (0 is value, 1 is X/Y, 2 is color, 4 is alpha color)
+        mat_param['size'] = f.read(1)[0] #number of values used in type
+        f.read(2) # Always zero, padding
         next = f.tell()
         assert next - base == 32
 
@@ -250,8 +251,10 @@ def parse_indices(f, count, offset):
 def parse_vertices(f, count, offset, layout, vertex_size):
     vertices = []
     f.seek(offset)
+    # For each vertices
     for i in range(count):
         vertex = {}
+        # For each layout type
         for j in range(len(layout)):
             elem = layout[j]
             array = []
@@ -284,7 +287,10 @@ def parse_meshes(f, count, offset):
     for i in range(count):
         mesh = {}
         base = f.tell()
-        mesh['unk0'] = read_uint(f)
+        mesh['unk0'] = f.read(1)[0]
+        mesh['skinned'] = f.read(1)[0]
+        mesh['bones'] = f.read(1)[0]
+        mesh['unk1'] = f.read(1)[0]
         mesh['material'] = read_int(f)
         f.read(4) # Always zero
         layout_offset = read_uint(f)
