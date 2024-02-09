@@ -54,9 +54,6 @@ def get_unique_names():
     # Get all material names
     for material in bpy.data.materials:
         names.add(material.name)
-        
-    for index, name in enumerate(names):
-        print(f'String: {index} {name}')
     return list(names)
 
 
@@ -137,17 +134,29 @@ def get_textures():
 
 
 # Writes all texture data, total size per texture 0x10 (16)
-def write_texture_data(file, textures):
+def write_texture_data(file, textures, utf16_strings):
     for index, texture in enumerate(textures):
+        base_pos = file.tell()
         # Index
         file.write(struct.pack('I', index))
         # Texture name and filename offset placeholders
-        file.write(bytes([0x00]) * 8)
+        utf16_strings.append({
+            'string': texture,
+            'base_pos': base_pos,
+            'write_pos': file.tell()
+        })
+        file.write(bytes([0x00]) * 4)
+        utf16_strings.append({
+            'string': texture,
+            'base_pos': base_pos,
+            'write_pos': file.tell()
+        })
+        file.write(bytes([0x00]) * 4)
         # 4 empty bytes at the end
         file.write(bytes([0x00]) * 4)
 
 
-def get_materials(textures):
+def get_materials(indexed_strings, textures):
     materials = []
     valid_materials = []
     # Filter any material that are not recognized by shader_data
@@ -167,7 +176,7 @@ def get_materials(textures):
     for index, material in enumerate(valid_materials):
         material_data = {
             'index': index,
-            'mat_name': material.name.encode('utf-16'),
+            'mat_name_index': indexed_strings.index(material.name),
             'blender_material': material,
         }
         parameters = []
@@ -177,7 +186,7 @@ def get_materials(textures):
             for node in material.node_tree.nodes:
                 # Filter the one group we are interested in
                 if hasattr(node, 'inputs') and node.type == 'GROUP' and node.node_tree.name in shader_data:
-                    material_data['shader_name'] = node.node_tree.name.encode('utf-16')
+                    material_data['shader_name'] = node.node_tree.name
                     for input in node.inputs:
                         # Skip all "extra" inputs
                         if input.name.endswith('_y') or input.name.endswith('_alpha'):
@@ -253,7 +262,7 @@ def get_texture(input, textures):
     image_node = find_parent_texture_node(input)
     texture_data = {
         'texture_index': textures.index(image_node.image.name),
-        'type': input.name.encode('ascii'),
+        'type': input.name,
         # TODO a lot of unknown data to be filled here
     }
     return texture_data
@@ -271,15 +280,19 @@ def find_parent_texture_node(input):
 
 
 # Writes all material data, total size per material 0x20 (32)
-def write_material_data(file, materials):
+def write_material_data(file, materials, ascii_strings, utf16_strings):
     # Write the main material data
     for material in materials:
         material['base_pos'] = file.tell()
-        #print(f'Writing material: {material["mat_name"]} at {material["base_pos"]}')
         file.write(struct.pack('H', material['index']))
         file.write(bytes([0x00]) * 2)   # unknown bytes
-        # Material name and Shader name offset placeholders
-        file.write(bytes([0x00]) * 8)
+        file.write(struct.pack('I', material['mat_name_index']))
+        utf16_strings.append({
+            'string': material['shader_name'],
+            'base_pos': material['base_pos'],
+            'write_pos': file.tell()
+        })
+        file.write(bytes([0x00]) * 4)
         material['parameter_pos'] = file.tell()
         file.write(struct.pack('i', 0))
         file.write(struct.pack('i', material['parameter_count']))
@@ -295,21 +308,31 @@ def write_material_data(file, materials):
         #print(f'Writing parameters: {material["mat_name"]} at {parameters_pos}')
         rewrite_offset(file, material['parameter_pos'], parameters_pos, material['base_pos'])
         for parameter in material['parameters']:
-            parameter['base_pos'] = file.tell()
+            base_pos = file.tell()
             file.write(struct.pack('6f', *parameter['values']))
             parameter['name_pos'] = file.tell()
+            ascii_strings.append({
+                'string': parameter['name'],
+                'base_pos': base_pos,
+                'write_pos': file.tell()
+            })
             file.write(struct.pack('i', 0))
             file.write(struct.pack('B', parameter['type']))
             file.write(struct.pack('B', parameter['size']))
             file.write(bytes([0x00]) * 2)  # padding
+            
         # Textures
         textures_pos = file.tell()
         #print(f'Writing textures: {material["mat_name"]} at {textures_pos}')
         rewrite_offset(file, material['texture_pos'], textures_pos, material['base_pos'])
         for texture in material['textures']:
-            texture['base_pos'] = file.tell()
+            base_pos = file.tell()
             file.write(struct.pack('i', texture['texture_index']))
-            texture['type_pos'] = file.tell()
+            ascii_strings.append({
+                'string': texture['type'],
+                'base_pos': base_pos,
+                'write_pos': file.tell()
+            })
             file.write(struct.pack('i', 0))
             file.write(bytes([0x00]) * 20)  # Unknown values
 
@@ -491,8 +514,9 @@ def get_vertices_data(mesh, is_skinned):
     return vertices_data
 
 
-def write_object_data(file, objects):
+def write_object_data(file, objects, ascii_strings):
     for object in objects:
+        print(f'Writing Object: {object["index"]} - {object["name_index"]} - {object["mesh_count"]}')
         # Write object info
         object['base_pos'] = file.tell()
         file.write(struct.pack('I', object['index']))
@@ -503,11 +527,12 @@ def write_object_data(file, objects):
     for object in objects:
         # Replace mesh_pos in object data
         rewrite_offset(file, object['mesh_pos'], file.tell(), object['base_pos'])
-        write_mesh_data(file, object)
+        write_mesh_data(file, object, ascii_strings)
 
-def write_mesh_data(file, object):
+def write_mesh_data(file, object, ascii_strings):
     # Write Mesh info
     for mesh in object['mesh_data']:
+        #print(f'Writing Mesh: Obj{object["index"]} Mesh:{mesh["mesh_index"]} - {mesh["vertices_count"]} - {mesh["indices_count"]}')
         mesh['base_pos'] = file.tell()
         file.write(bytes([0x00]))  # Unknown bool
         file.write(struct.pack('B', mesh['skinned_mesh']))
@@ -531,11 +556,15 @@ def write_mesh_data(file, object):
         rewrite_offset(file, mesh['vertex_layout_pos'], file.tell(), mesh['base_pos'])
         # Write Vertex Layer Info
         for layout in mesh['vertices_data']:
-            layout['base_pos'] = file.tell()
+            base_pos = file.tell()
             file.write(struct.pack('I', layout['type']))
             file.write(struct.pack('I', layout['offset']))
             file.write(struct.pack('I', layout['channel']))
-            layout['name_pos'] = file.tell()
+            ascii_strings.append({
+                'string': layout['name'],
+                'base_pos': base_pos,
+                'write_pos': file.tell()
+            })
             file.write(struct.pack('I', 0))
     for mesh in object['mesh_data']:
         # Replace indice_data_pos in mesh data
@@ -564,17 +593,66 @@ def write_mesh_data(file, object):
                     file.write(struct.pack('4B', *vert_data))
                 else:
                     print("Unknown vertex layout type: " + str(type))
-            
-            
+
+
+def write_ascii_string(file, ascii_strings):
+    written_strings = {}
+    # Write all the strings and store their positions
+    for string_data in ascii_strings:
+        string = string_data['string'].encode('ascii')
+        if string not in written_strings:
+            written_strings[string] = file.tell()
+            file.write(string)
+            file.write(bytes([0x00]))  # Terminate string
+    # Write all the positions away and return to starting position
+    last_pos = file.tell()
+    for string_data in ascii_strings:
+        string = string_data['string'].encode('ascii')
+        string_pos = written_strings[string]
+        rewrite_offset(file, string_data['write_pos'], string_pos, string_data['base_pos'])
+    file.seek(last_pos)
+
+
+def write_indexed_strings(file, indexed_strings):
+    indexes = []
+    for index, raw_string in enumerate(indexed_strings):
+        indexes.append(file.tell())
+        file.write(raw_string.encode('UTF-16LE'))
+        file.write(bytes([0x00, 0x00]))  # Terminate string
+    original_pos = file.tell()
+    file.seek(0x30)  # Offset to the start of the name table, fixed location.
+    for index in indexes:
+        file.write(struct.pack('I', index - file.tell()))
+    file.seek(original_pos)
+
+
+def write_utf16_strings(file, utf16_strings):
+    written_strings = {}
+    # Write all the strings and store their positions
+    for string_data in utf16_strings:
+        string = string_data['string'].encode('UTF-16LE')
+        if string not in written_strings:
+            written_strings[string] = file.tell()
+            file.write(string)
+            file.write(bytes([0x00, 0x00]))  # Terminate string
+    # Write all the positions away and return to starting position
+    last_pos = file.tell()
+    for string_data in utf16_strings:
+        string = string_data['string'].encode('UTF-16LE')
+        string_pos = written_strings[string]
+        rewrite_offset(file, string_data['write_pos'], string_pos, string_data['base_pos'])
+    file.seek(last_pos)
 
 
 def save(operator, context, filepath="", **kwargs):
     # Get the name table
     indexed_strings = get_unique_names()
+    ascii_strings = []
+    utf16_strings = []
     # Gather all the different parts we need
     bones = get_bone_data(indexed_strings)
     texture_names = get_textures()
-    materials = get_materials(texture_names)
+    materials = get_materials(indexed_strings, texture_names)
     objects = get_objects(indexed_strings, materials)
     
     with open(filepath, 'wb') as file:
@@ -587,17 +665,19 @@ def save(operator, context, filepath="", **kwargs):
         # Write header Texture offset
         rewrite_offset(file, 0x2C, file.tell(), 0x00)
         # Write Texture data
-        write_texture_data(file, texture_names)
+        write_texture_data(file, texture_names, utf16_strings)
         # Write header Material offset
         rewrite_offset(file, 0x24, file.tell(), 0x00)
         # Write Material data
-        write_material_data(file, materials)
+        write_material_data(file, materials, ascii_strings, utf16_strings)
         # Write header Object offset
         rewrite_offset(file, 0x1C, file.tell(), 0x00)
         # Write Object data
-        write_object_data(file, objects)
+        write_object_data(file, objects, ascii_strings)
         # Write all strings
-        #write_strings(file, indexed_strings)
+        write_ascii_string(file, ascii_strings)
+        write_indexed_strings(file, indexed_strings)
+        write_utf16_strings(file, utf16_strings)
         
         #TODO all the string replacement
     #pprint.pprint(objects[0]['mesh_data'])
