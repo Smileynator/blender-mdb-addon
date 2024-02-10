@@ -116,7 +116,7 @@ def write_bone_data(f, bones):
         f.write(struct.pack('I', bone['name_index']))
         f.write(struct.pack('I', bone['child_count']))
         # Unknown bytes
-        f.write(bytes([0x00, 0x00, 0x00]))
+        f.write(bytes([0x00, 0x00, 0x01])) # Last byte true or the mesh will not visualize. Unknown why.
         # Padding previous bytes to 8
         f.write(bytes([0x00, 0x00, 0x00, 0x00, 0x00]))
         # Matrices
@@ -208,7 +208,7 @@ def get_materials(indexed_strings, textures):
         material_data['textures'] = texture_data
         material_data['texture_count'] = len(texture_data)
         material_data['texture_offset'] = 0
-        #TODO unknown values
+        #TODO unknown value
         materials.append(material_data)
     return materials
 
@@ -605,7 +605,6 @@ def write_vertex_data(file, object):
                     file.write(struct.pack('4B', *vert_data))
                 else:
                     print("Unknown vertex layout type: " + str(type))
-
 
 def write_ascii_string(file, ascii_strings):
     written_strings = {}
