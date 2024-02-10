@@ -103,12 +103,12 @@ def parse_bones(f, count, offset, name_table):
         bone['unk7'] = read_float(f) # Float4 Contact positions? Set for "actual bones" but 0 for "aim point" bones?
         bone['unk8'] = read_float(f)
         bone['unk9'] = read_float(f)
-        f.read(4) # Always 1.0
+        bone['unk10'] = read_float(f)
 
-        bone['unk10'] = read_float(f) # Unknown Float4? Set for "actual bones" but 0 for "aim point" bones?
-        bone['unk11'] = read_float(f)
+        bone['unk11'] = read_float(f) # Unknown Float4? Set for "actual bones" but 0 for "aim point" bones?
         bone['unk12'] = read_float(f)
-        f.read(4) # Always 1.0
+        bone['unk13'] = read_float(f)
+        bone['unk14'] = read_float(f)
         
         next = f.tell()
         assert next - base == 192
@@ -643,8 +643,6 @@ def load(operator, context, filepath='', **kwargs):
                 mesh.normals_split_custom_set_from_vertices(normals)
                 mesh.use_auto_smooth = True # Enable custom normals
 
-            # TODO: Binormals and tangents?
-
             # Add UV maps
             for i in range(4):
                 coordstr = 'texcoord' + str(i)
@@ -655,6 +653,9 @@ def load(operator, context, filepath='', **kwargs):
                             texcoord = vertices[vert_idx][coordstr]
                             uvmap.data[loop_idx].uv[0] = texcoord[0]
                             uvmap.data[loop_idx].uv[1] = 1.0 - texcoord[1]
+
+            # Calculate tangents and binormals for later export!
+            mesh.calc_tangents()
 
             # Add vertex groups
             if 'BLENDWEIGHT0' in vertices[0]:

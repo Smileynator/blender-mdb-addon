@@ -423,47 +423,7 @@ def get_vertices_data(mesh, is_skinned):
     vertices_data = []
     # Due to the nature of this data, it makes sense to just generate it as i saw in example files
     # We cannot be certain for each of these if they exist or not until proven otherwise in practice
-    position_data = {
-        'name': 'position',
-        'type': 7,
-        'size': 8,
-        'channel': 0,
-        'data': []
-    }
-    vertices_data.append(position_data)
-    normal_data = {
-        'name': 'normal',
-        'type': 7,
-        'size': 8,
-        'channel': 0,
-        'data': []
-    }
-    vertices_data.append(normal_data)
-    binormal_data = {
-        'name': 'binormal',
-        'type': 7,
-        'size': 8,
-        'channel': 0,
-        'data': []
-    }
-    vertices_data.append(binormal_data)
-    tangent_data = {
-        'name': 'tangent',
-        'type': 7,
-        'size': 8,
-        'channel': 0,
-        'data': []
-    }
-    vertices_data.append(tangent_data)
     if is_skinned:
-        blend_weight_data = {
-            'name': 'BLENDWEIGHT',
-            'type': 1,
-            'size': 16,
-            'channel': 0,
-            'data': []
-        }
-        vertices_data.append(blend_weight_data)
         blend_indices_data = {
             'name': 'BLENDINDICES',
             'type': 21,
@@ -472,6 +432,46 @@ def get_vertices_data(mesh, is_skinned):
             'data': []
         }
         vertices_data.append(blend_indices_data)
+        blend_weight_data = {
+            'name': 'BLENDWEIGHT',
+            'type': 1,
+            'size': 16,
+            'channel': 0,
+            'data': []
+        }
+        vertices_data.append(blend_weight_data)
+    binormal_data = {
+        'name': 'binormal',
+        'type': 7,
+        'size': 8,
+        'channel': 0,
+        'data': []
+    }
+    vertices_data.append(binormal_data)
+    normal_data = {
+        'name': 'normal',
+        'type': 7,
+        'size': 8,
+        'channel': 0,
+        'data': []
+    }
+    vertices_data.append(normal_data)
+    position_data = {
+        'name': 'position',
+        'type': 7,
+        'size': 8,
+        'channel': 0,
+        'data': []
+    }
+    vertices_data.append(position_data)
+    tangent_data = {
+        'name': 'tangent',
+        'type': 7,
+        'size': 8,
+        'channel': 0,
+        'data': []
+    }
+    vertices_data.append(tangent_data)
     # We store a UV array seperately just for easy access when looping over indices.
     uv_data = []
     for channel, uv in enumerate(mesh.uv_layers):
@@ -488,11 +488,10 @@ def get_vertices_data(mesh, is_skinned):
     uv_count = len(mesh.uv_layers)
     for vert in mesh.vertices:
         loop = vertex_loops[vert.index]['loops'][0]  # Get the first loop this vertex is part of
-        position_data['data'].append([vert.co[0], vert.co[2], -vert.co[1], 0.0])  # Correct orientation from import!
-        normal_data['data'].append([vert.normal[0], vert.normal[2], -vert.normal[1], 0.0])
-        # TODO figure out calculating binormal and tangent instead of taking first blindly
-        binormal_data['data'].append([loop.bitangent[0], loop.bitangent[2], -loop.bitangent[1], 0.0])
-        tangent_data['data'].append([loop.tangent[0], loop.tangent[2], -loop.tangent[1], 0.0])
+        position_data['data'].append([vert.co[0], vert.co[2], -vert.co[1], 1.0])  # Correct orientation from import!
+        normal_data['data'].append([vert.normal[0], vert.normal[2], -vert.normal[1], 1.0])
+        binormal_data['data'].append([loop.bitangent[0], loop.bitangent[2], -loop.bitangent[1], 1.0])
+        tangent_data['data'].append([loop.tangent[0], loop.tangent[2], -loop.tangent[1], 1.0])
         # UVs
         for i in range(uv_count):
             uv_vector = mesh.uv_layers[i].data[loop.index].uv
@@ -501,10 +500,10 @@ def get_vertices_data(mesh, is_skinned):
         if is_skinned:
             weights = []
             indices = []
-            for index, bone in enumerate(vert.groups):
+            for bone in vert.groups:
                 if bone.weight > 0:
                     weights.append(bone.weight)
-                    indices.append(index) #TODO incorrect?
+                    indices.append(bone.group)
                     if len(weights) == 4:
                         break # No need to keep looping, we got all 4 which is the maximum
             while len(weights) < 4:
