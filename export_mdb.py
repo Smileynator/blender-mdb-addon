@@ -533,6 +533,9 @@ def write_object_data(file, objects, ascii_strings):
         # Replace mesh_pos in object data
         rewrite_offset(file, object['mesh_pos'], file.tell(), object['base_pos'])
         write_mesh_data(file, object, ascii_strings)
+    for object in objects:
+        write_vertex_data(file, object)
+
 
 def write_mesh_data(file, object, ascii_strings):
     # Write Mesh info
@@ -556,10 +559,11 @@ def write_mesh_data(file, object, ascii_strings):
         file.write(struct.pack('I', mesh['indices_count']))
         mesh['indice_data_pos'] = file.tell()
         file.write(struct.pack('i', 0))
+
+    # Write Vertex Layout info
     for mesh in object['mesh_data']:
         # Replace vertex_layout_pos in mesh data
         rewrite_offset(file, mesh['vertex_layout_pos'], file.tell(), mesh['base_pos'])
-        # Write Vertex Layer Info
         for layout in mesh['vertices_data']:
             base_pos = file.tell()
             file.write(struct.pack('I', layout['type']))
@@ -571,16 +575,19 @@ def write_mesh_data(file, object, ascii_strings):
                 'write_pos': file.tell()
             })
             file.write(struct.pack('I', 0))
+
+
+def write_vertex_data(file, object):
+    # Write all indices
     for mesh in object['mesh_data']:
         # Replace indice_data_pos in mesh data
         rewrite_offset(file, mesh['indice_data_pos'], file.tell(), mesh['base_pos'])
-        # Write all indices
         for indice in mesh['indice_data']:
             file.write(struct.pack('H', indice))
+    # Write all Vertex data
     for mesh in object['mesh_data']:
         # Replace vertex_data_pos in mesh data
         rewrite_offset(file, mesh['vertex_data_pos'], file.tell(), mesh['base_pos'])
-        # Write all Vertex data
         for i in range(mesh['vertices_count']):
             for layout in mesh['vertices_data']:
                 type = layout['type']
