@@ -9,7 +9,10 @@ from struct import pack, unpack
 from .shader import new_socket, Shader, get_shader
 
 # Original model is Y UP, but blender is Z UP by default, we convert that here.
-bone_up_Y = mathutils.Matrix.Rotation(np.pi/2, 4, 'X')
+bone_up_Y = mathutils.Matrix(((1.0, 0.0, 0.0, 0.0),
+                            (0.0, 0.0, -1.0, 0.0),
+                            (0.0, 1.0, 0.0, 0.0),
+                            (0.0, 0.0, 0.0, 1.0)))
 
 
 # Read helper functions

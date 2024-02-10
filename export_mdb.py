@@ -4,10 +4,16 @@
 import bpy
 import struct
 import pprint
+import mathutils
 import numpy as np
 
 from .shader_data import shaders as shader_data
 
+# Original model is Y UP, but blender is Z UP by default, we convert that here.
+bone_up_Y = mathutils.Matrix(((1.0, 0.0, 0.0, 0.0),
+                              (0.0, 0.0, -1.0, 0.0),
+                              (0.0, 1.0, 0.0, 0.0),
+                              (0.0, 0.0, 0.0, 1.0)))
 
 def write_header(file, names, bones, objects, materials, textures):
     file.write(b'MDB0')
@@ -81,23 +87,20 @@ def get_bone_data(names):
                     continue
                 if found_self:
                     bone_data['next_sibling'] = blender_bones[sibling]
+                    break
         # Find first child if i have any
         bone_data['first_child'] = blender_bones[bone.children[0]] if bone.children else -1
         bone_data['name_index'] = names.index(bone.name)
         bone_data['child_count'] = len(bone.children)
-
         # Unpack the 4x4 matrices into a flat list of 16 float values
-        # TODO these matrixes seem to not be local, and if they are, they are fucked. Fix that i suppose.
-        bone_data['local_matrix'] = [element for row in bone.matrix_local for element in row]
-        bone_data['inverse_bind_matrix'] = [element for row in bone.matrix_local.inverted() for element in row]
-        # Debug print to inspect created data
-        '''if True: #index < 5:
-            print(bone.name +" ---")
-            pprint.pprint(bone.matrix)
-            print(bone.name +" -----")
-            pprint.pprint(bone)
-            print(bone.name + " data ---")
-            pprint.pprint(bone_data)'''
+        # Local matrix back to file format
+        matrix = bone_up_Y.inverted() @ bone.matrix_local
+        if bone.parent:
+            matrix = bone.parent.matrix_local.inverted() @ bone.matrix_local
+        bone_data['local_matrix'] = [element for col in matrix.col for element in col]
+        # Inverse bind matrix
+        inv_matrix = bone.matrix_local.inverted() @ bone_up_Y
+        bone_data['inverse_bind_matrix'] = [element for col in inv_matrix.col for element in col]
         # Append the bone data to the list
         bones.append(bone_data)
     return bones
@@ -519,7 +522,7 @@ def get_vertices_data(mesh, is_skinned):
 
 def write_object_data(file, objects, ascii_strings):
     for object in objects:
-        print(f'Writing Object: {object["index"]} - {object["name_index"]} - {object["mesh_count"]}')
+        #print(f'Writing Object: {object["index"]} - {object["name_index"]} - {object["mesh_count"]}')
         # Write object info
         object['base_pos'] = file.tell()
         file.write(struct.pack('I', object['index']))
