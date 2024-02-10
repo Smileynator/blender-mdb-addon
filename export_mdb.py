@@ -413,6 +413,9 @@ def get_mesh_data(index, mesh_object, materials):
 
 # Gathers all the data per vertices and returns the object
 def get_vertices_data(mesh, is_skinned):
+    # Calculate tangents and binormals
+    mesh.calc_tangents()
+    
     vertex_loops = {}
     for loop in mesh.loops:
         if loop.vertex_index not in vertex_loops:

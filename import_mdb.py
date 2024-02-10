@@ -654,9 +654,6 @@ def load(operator, context, filepath='', **kwargs):
                             uvmap.data[loop_idx].uv[0] = texcoord[0]
                             uvmap.data[loop_idx].uv[1] = 1.0 - texcoord[1]
 
-            # Calculate tangents and binormals for later export!
-            mesh.calc_tangents()
-
             # Add vertex groups
             if 'BLENDWEIGHT0' in vertices[0]:
                 groups = []
