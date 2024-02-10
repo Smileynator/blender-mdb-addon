@@ -62,24 +62,27 @@ def get_bone_data(names):
     armature = bpy.data.armatures[0]
     if not armature:
         return
+    # Make a lookup for bone indexes
+    blender_bones = {}
     for index, bone in enumerate(armature.bones):
+        blender_bones[bone] = index
+    # Populate bone data
+    for bone in armature.bones:
         bone_data = {}
-        # TODO unknown data actually filling here
-        bone_data['bl_bone'] = bone # To do some lookups with INDEX
-        bone_data['index'] = index
-        #bone_data['parent'] = ??? if bone.parent else -1
-        '''bone_data['next_sibling'] = -1
+        bone_data['index'] = blender_bones[bone]
+        bone_data['parent'] = blender_bones[bone.parent] if bone.parent else -1
+        bone_data['next_sibling'] = -1
         # Find next sibling if any
         if bone.parent:
-            foundSelf = False
+            found_self = False
             for sibling in bone.parent.children:
-                if sibling.index == bone.index:
-                    foundSelf = True
+                if sibling == bone:
+                    found_self = True
                     continue
-                if foundSelf:
-                    bone_data['next_sibling'] = sibling.index
+                if found_self:
+                    bone_data['next_sibling'] = blender_bones[sibling]
         # Find first child if i have any
-        bone_data['first_child'] = bone.children[0].index if bone.children[0] else -1'''
+        bone_data['first_child'] = blender_bones[bone.children[0]] if bone.children else -1
         bone_data['name_index'] = names.index(bone.name)
         bone_data['child_count'] = len(bone.children)
 
@@ -104,11 +107,11 @@ def get_bone_data(names):
 def write_bone_data(f, bones):
     for bone in bones:
         f.write(struct.pack('I', bone['index']))
-        f.write(struct.pack('i', -1))#bone['parent']))
-        f.write(struct.pack('i', -1))#bone['next_sibling']))
-        f.write(struct.pack('i', -1))#bone['first_child']))
+        f.write(struct.pack('i', bone['parent']))
+        f.write(struct.pack('i', bone['next_sibling']))
+        f.write(struct.pack('i', bone['first_child']))
         f.write(struct.pack('I', bone['name_index']))
-        f.write(struct.pack('I', 0))#bone['child_count']))
+        f.write(struct.pack('I', bone['child_count']))
         # Unknown bytes
         f.write(bytes([0x00, 0x00, 0x00]))
         # Padding previous bytes to 8
@@ -481,16 +484,16 @@ def get_vertices_data(mesh, is_skinned):
     # Finally we go over all the vertices and populate the data arrays in each of the above data channels
     uv_count = len(mesh.uv_layers)
     for vert in mesh.vertices:
-        loop = vertex_loops[vert.index]['loops'][0] # Get the first loop this vertex is part of
-        position_data['data'].append([vert.co[0], vert.co[1], vert.co[2], 0.0])
-        normal_data['data'].append([vert.normal[0], vert.normal[1], vert.normal[2], 0.0])
+        loop = vertex_loops[vert.index]['loops'][0]  # Get the first loop this vertex is part of
+        position_data['data'].append([vert.co[0], vert.co[2], -vert.co[1], 0.0])  # Correct orientation from import!
+        normal_data['data'].append([vert.normal[0], vert.normal[2], -vert.normal[1], 0.0])
         # TODO figure out calculating binormal and tangent instead of taking first blindly
-        binormal_data['data'].append([loop.bitangent[0], loop.bitangent[1], loop.bitangent[2], 0.0])
-        tangent_data['data'].append([loop.tangent[0], loop.tangent[1], loop.tangent[2], 0.0])
+        binormal_data['data'].append([loop.bitangent[0], loop.bitangent[2], -loop.bitangent[1], 0.0])
+        tangent_data['data'].append([loop.tangent[0], loop.tangent[2], -loop.tangent[1], 0.0])
         # UVs
         for i in range(uv_count):
             uv_vector = mesh.uv_layers[i].data[loop.index].uv
-            uv_data[i]['data'].append([uv_vector[0], uv_vector[1]])
+            uv_data[i]['data'].append([uv_vector[0], 1.0 - uv_vector[1]])  # UV map flip Y value
         # Skinned mesh
         if is_skinned:
             weights = []
@@ -678,7 +681,4 @@ def save(operator, context, filepath="", **kwargs):
         write_ascii_string(file, ascii_strings)
         write_indexed_strings(file, indexed_strings)
         write_utf16_strings(file, utf16_strings)
-        
-        #TODO all the string replacement
-    #pprint.pprint(objects[0]['mesh_data'])
     return {'FINISHED'}
