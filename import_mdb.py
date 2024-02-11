@@ -588,10 +588,6 @@ def load(operator, context, filepath='', **kwargs):
     for mdb_bone in mdb['bones']:
         # Create bone with name
         bone = edit_bones.new(mdb_bone['name'])
-        # Set layers
-        bone.layers[mdb_bone['group']] = True
-        if mdb_bone['group'] != 0:
-            bone.layers[0] = False
         # No length would mean they get removed for some reason, so we give it a fixed non zero length
         bone.length = 0.25
         # Apply the transform matrix of the bone and parent
@@ -601,6 +597,7 @@ def load(operator, context, filepath='', **kwargs):
         else:
             bone.matrix = bone_up_Y @ mdb_bone['matrix_local']
         # Until we know what these do, we just preserve them
+        bone['group'] = mdb_bone['group']
         bone['unknown_ints'] = [int(mdb_bone['unk1']), int(mdb_bone['unk2'])]
         bone['unknown_floats'] = [float(mdb_bone['unk3']), float(mdb_bone['unk4']),
                                   float(mdb_bone['unk5']), float(mdb_bone['unk6']),
@@ -608,7 +605,6 @@ def load(operator, context, filepath='', **kwargs):
                                   float(mdb_bone['unk9']), float(mdb_bone['unk10'])]
         # Add bone to bone list
         bones.append(bone)
-
     bpy.ops.object.mode_set(mode='OBJECT')
 
     # Add meshes

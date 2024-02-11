@@ -107,6 +107,7 @@ def get_bone_data(names):
         inv_matrix = bone.matrix_local.inverted() @ bone_up_Y
         bone_data['inverse_bind_matrix'] = [element for col in inv_matrix.col for element in col]
         # Get unknown values
+        bone_data['group'] = bone['group']
         bone_data['unk1'] = bone['unknown_ints'][0]
         bone_data['unk2'] = bone['unknown_ints'][1]
         bone_data['unknown_floats'] = bone['unknown_floats']
