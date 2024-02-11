@@ -91,24 +91,24 @@ def parse_bones(f, count, offset, name_table):
         bone['first_child'] = read_int(f) # First Child index -1 for none.
         bone['name'] = name_table[read_uint(f)] # Bone name
         bone['child_count'] = read_uint(f) # Child bone count
-        bone['unk4'] = f.read(1)[0] # Unknown byte Control Group? generally low value 0=root, 1=???, 2=unskinnedBone, 3=skinnedbone
-        bone['unk5'] = f.read(1)[0] # Unknown byte value 0, 1, 2(camera aim) 4(aim point), 250-255 as values, groupings consistent between models but still unclear
-        bone['connect'] = f.read(1)[0] == 1 # Bool, true if unk7 to 12 are used! Only false so far for empty/target nodes
+        bone['group'] = f.read(1)[0] # Unknown byte Control Group? generally low value 0=root, 1=???, 2=unskinnedBone, 3=skinnedbone
+        bone['unk1'] = f.read(1)[0] # Unknown byte value 0, 1, 2(camera aim) 4(aim point), 250-255 as values, groupings consistent between models but still unclear
+        bone['unk2'] = f.read(1)[0] == 1 # Bool, true if unk7 to 12 are used! Only false so far for empty/target nodes
         f.read(5) # Always zero - 8 byte padding
 
         bone['matrix_local'] = read_matrix(f) # Transformation Matrix local
         bone['matrix_invbind'] = read_matrix(f) # Transformation Matrix Invert Bind Pose
 
         # If one is set, the other is always set as well
-        bone['unk7'] = read_float(f) # Float4 Contact positions? Set for "actual bones" but 0 for "aim point" bones?
+        bone['unk3'] = read_float(f)  # Float4 Contact positions? Set for "actual bones" but 0 for "aim point" bones?
+        bone['unk4'] = read_float(f)
+        bone['unk5'] = read_float(f)
+        bone['unk6'] = read_float(f)
+
+        bone['unk7'] = read_float(f)  # Unknown Float4? Set for "actual bones" but 0 for "aim point" bones?
         bone['unk8'] = read_float(f)
         bone['unk9'] = read_float(f)
         bone['unk10'] = read_float(f)
-
-        bone['unk11'] = read_float(f) # Unknown Float4? Set for "actual bones" but 0 for "aim point" bones?
-        bone['unk12'] = read_float(f)
-        bone['unk13'] = read_float(f)
-        bone['unk14'] = read_float(f)
         
         next = f.tell()
         assert next - base == 192
@@ -199,14 +199,15 @@ def parse_materials(f, count, offset, name_table):
         material = {}
         base = f.tell()
         material['index'] = read_ushort(f)
-        material['unk0'] = read_ushort(f)
+        material['unk0'] = f.read(1)[0]
+        material['unk1'] = f.read(1)[0]
         material_name = read_uint(f)
         shader = read_uint(f)
         param_offset = read_uint(f)
         param_count = read_uint(f)
         txr_offset = read_uint(f)
         txr_count = read_uint(f)
-        material['unk1'] = read_uint(f)
+        material['unk2'] = read_uint(f)
         next = f.tell()
         assert next - base == 32
 
@@ -295,7 +296,7 @@ def parse_meshes(f, count, offset):
         mesh['bones'] = f.read(1)[0]
         mesh['unk1'] = f.read(1)[0]
         mesh['material'] = read_int(f)
-        f.read(4) # Always zero
+        mesh['material2'] = read_int(f)
         layout_offset = read_uint(f)
         mesh['vertex_size'] = read_ushort(f)
         layout_count = read_ushort(f)
@@ -587,6 +588,10 @@ def load(operator, context, filepath='', **kwargs):
     for mdb_bone in mdb['bones']:
         # Create bone with name
         bone = edit_bones.new(mdb_bone['name'])
+        # Set layers
+        bone.layers[mdb_bone['group']] = True
+        if mdb_bone['group'] != 0:
+            bone.layers[0] = False
         # No length would mean they get removed for some reason, so we give it a fixed non zero length
         bone.length = 0.25
         # Apply the transform matrix of the bone and parent
@@ -595,6 +600,12 @@ def load(operator, context, filepath='', **kwargs):
             bone.matrix = bone.parent.matrix @ mdb_bone['matrix_local']
         else:
             bone.matrix = bone_up_Y @ mdb_bone['matrix_local']
+        # Until we know what these do, we just preserve them
+        bone['unknown_ints'] = [int(mdb_bone['unk1']), int(mdb_bone['unk2'])]
+        bone['unknown_floats'] = [float(mdb_bone['unk3']), float(mdb_bone['unk4']),
+                                  float(mdb_bone['unk5']), float(mdb_bone['unk6']),
+                                  float(mdb_bone['unk7']), float(mdb_bone['unk8']),
+                                  float(mdb_bone['unk9']), float(mdb_bone['unk10'])]
         # Add bone to bone list
         bones.append(bone)
 

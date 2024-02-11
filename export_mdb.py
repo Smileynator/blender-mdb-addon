@@ -92,6 +92,11 @@ def get_bone_data(names):
         bone_data['first_child'] = blender_bones[bone.children[0]] if bone.children else -1
         bone_data['name_index'] = names.index(bone.name)
         bone_data['child_count'] = len(bone.children)
+        bone_data['group'] = 0
+        for i in range(4):
+            if bone.layers[i]:
+                bone_data['group'] = i
+                break
         # Unpack the 4x4 matrices into a flat list of 16 float values
         # Local matrix back to file format
         matrix = bone_up_Y.inverted() @ bone.matrix_local
@@ -101,6 +106,10 @@ def get_bone_data(names):
         # Inverse bind matrix
         inv_matrix = bone.matrix_local.inverted() @ bone_up_Y
         bone_data['inverse_bind_matrix'] = [element for col in inv_matrix.col for element in col]
+        # Get unknown values
+        bone_data['unk1'] = bone['unknown_ints'][0]
+        bone_data['unk2'] = bone['unknown_ints'][1]
+        bone_data['unknown_floats'] = bone['unknown_floats']
         # Append the bone data to the list
         bones.append(bone_data)
     return bones
@@ -115,16 +124,17 @@ def write_bone_data(f, bones):
         f.write(struct.pack('i', bone['first_child']))
         f.write(struct.pack('I', bone['name_index']))
         f.write(struct.pack('I', bone['child_count']))
+        f.write(struct.pack('B', bone['group']))
         # Unknown bytes
-        f.write(bytes([0x00, 0x00, 0x01])) # Last byte true or the mesh will not visualize. Unknown why.
+        f.write(struct.pack('B', bone['unk1']))
+        f.write(struct.pack('B', bone['unk2']))  # true or the mesh will not visualize. Unknown why.
         # Padding previous bytes to 8
         f.write(bytes([0x00, 0x00, 0x00, 0x00, 0x00]))
         # Matrices
         f.write(struct.pack('16f', *bone['local_matrix']))
         f.write(struct.pack('16f', *bone['inverse_bind_matrix']))
         # 2 Unknown float4's, last value always 1
-        f.write(struct.pack('4f', 0.0, 0.0, 0.0, 1.0))
-        f.write(struct.pack('4f', 0.0, 0.0, 0.0, 1.0))
+        f.write(struct.pack('8f', *bone['unknown_floats']))
 
 
 def get_textures():
@@ -414,7 +424,8 @@ def get_mesh_data(index, mesh_object, materials):
 # Gathers all the data per vertices and returns the object
 def get_vertices_data(mesh, is_skinned):
     # Calculate tangents and binormals
-    mesh.calc_tangents()
+    mesh.calc_tangents() # TODO pretty sure transparent objects need another UV but not sure.
+    #mesh.calc_tangents(uvmap=mesh.uv_layers.active.name)
     
     vertex_loops = {}
     for loop in mesh.loops:
