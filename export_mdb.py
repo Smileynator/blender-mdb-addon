@@ -195,6 +195,9 @@ def get_materials(indexed_strings, textures):
             'index': index,
             'mat_name_index': indexed_strings.index(material.name),
             'blender_material': material,
+            'render_priority': material['render_priority'],
+            'render_layer': material['render_layer'],
+            'render_type': material['render_type'],
         }
         parameters = []
         texture_data = []
@@ -302,7 +305,8 @@ def write_material_data(file, materials, ascii_strings, utf16_strings):
     for material in materials:
         material['base_pos'] = file.tell()
         file.write(struct.pack('H', material['index']))
-        file.write(bytes([0x00]) * 2)   # unknown bytes
+        file.write(struct.pack('B', material['render_priority']))
+        file.write(struct.pack('B', material['render_layer']))
         file.write(struct.pack('I', material['mat_name_index']))
         utf16_strings.append({
             'string': material['shader_name'],
@@ -316,8 +320,8 @@ def write_material_data(file, materials, ascii_strings, utf16_strings):
         material['texture_pos'] = file.tell()
         file.write(struct.pack('i', 0))
         file.write(struct.pack('i', material['texture_count']))
-        file.write(struct.pack('i', 0x03)) # Unknown but usually 3
-        
+        file.write(struct.pack('I', material['render_type']))
+
     # Write the parameter and texture data per material
     for material in materials:
         # Parameters

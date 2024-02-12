@@ -199,15 +199,15 @@ def parse_materials(f, count, offset, name_table):
         material = {}
         base = f.tell()
         material['index'] = read_ushort(f)
-        material['unk0'] = f.read(1)[0]
-        material['unk1'] = f.read(1)[0]
+        material['render_priority'] = f.read(1)[0]
+        material['render_layer'] = f.read(1)[0]
         material_name = read_uint(f)
         shader = read_uint(f)
         param_offset = read_uint(f)
         param_count = read_uint(f)
         txr_offset = read_uint(f)
         txr_count = read_uint(f)
-        material['unk2'] = read_uint(f)
+        material['render_type'] = read_uint(f)
         next = f.tell()
         assert next - base == 32
 
@@ -477,6 +477,11 @@ def load(operator, context, filepath='', **kwargs):
     for mdb_material in mdb['materials']:
         lshader = mdb_material['shader'].lower()
         material = bpy.data.materials.new(mdb_material['name'])
+        # Custom properties
+        material['render_priority'] = mdb_material['render_priority']
+        material['render_layer'] = mdb_material['render_layer']
+        material['render_type'] = mdb_material['render_type']
+        
         if lshader.endswith('_alpha') or lshader.endswith('_hair'):
             material.blend_method = 'HASHED'
         elif lshader.endswith('_clip'):
