@@ -9,7 +9,10 @@ from struct import pack, unpack
 from .shader import new_socket, Shader, get_shader
 
 # Original model is Y UP, but blender is Z UP by default, we convert that here.
-bone_up_Y = mathutils.Matrix.Rotation(np.pi/2, 4, 'X')
+bone_up_Y = mathutils.Matrix(((1.0, 0.0, 0.0, 0.0),
+                            (0.0, 0.0, -1.0, 0.0),
+                            (0.0, 1.0, 0.0, 0.0),
+                            (0.0, 0.0, 0.0, 1.0)))
 
 
 # Read helper functions
@@ -88,24 +91,24 @@ def parse_bones(f, count, offset, name_table):
         bone['first_child'] = read_int(f) # First Child index -1 for none.
         bone['name'] = name_table[read_uint(f)] # Bone name
         bone['child_count'] = read_uint(f) # Child bone count
-        bone['unk4'] = f.read(1)[0] # Unknown byte Control Group? generally low value 0=root, 1=???, 2=unskinnedBone, 3=skinnedbone
-        bone['unk5'] = f.read(1)[0] # Unknown byte value 0, 1, 2(camera aim) 4(aim point), 250-255 as values, groupings consistent between models but still unclear
-        bone['connect'] = f.read(1)[0] == 1 # Bool, true if unk7 to 12 are used! Only false so far for empty/target nodes
+        bone['group'] = f.read(1)[0] # Unknown byte Control Group? generally low value 0=root, 1=???, 2=unskinnedBone, 3=skinnedbone
+        bone['unk1'] = f.read(1)[0] # Unknown byte value 0, 1, 2(camera aim) 4(aim point), 250-255 as values, groupings consistent between models but still unclear
+        bone['unk2'] = f.read(1)[0] == 1 # Bool, true if unk7 to 12 are used! Only false so far for empty/target nodes
         f.read(5) # Always zero - 8 byte padding
 
         bone['matrix_local'] = read_matrix(f) # Transformation Matrix local
         bone['matrix_invbind'] = read_matrix(f) # Transformation Matrix Invert Bind Pose
 
         # If one is set, the other is always set as well
-        bone['unk7'] = read_float(f) # Float4 Contact positions? Set for "actual bones" but 0 for "aim point" bones?
+        bone['unk3'] = read_float(f)  # Float4 Contact positions? Set for "actual bones" but 0 for "aim point" bones?
+        bone['unk4'] = read_float(f)
+        bone['unk5'] = read_float(f)
+        bone['unk6'] = read_float(f)
+
+        bone['unk7'] = read_float(f)  # Unknown Float4? Set for "actual bones" but 0 for "aim point" bones?
         bone['unk8'] = read_float(f)
         bone['unk9'] = read_float(f)
-        f.read(4) # Always 1.0
-
-        bone['unk10'] = read_float(f) # Unknown Float4? Set for "actual bones" but 0 for "aim point" bones?
-        bone['unk11'] = read_float(f)
-        bone['unk12'] = read_float(f)
-        f.read(4) # Always 1.0
+        bone['unk10'] = read_float(f)
         
         next = f.tell()
         assert next - base == 192
@@ -152,7 +155,7 @@ def parse_mat_param(f, count, offset):
         mat_param['val4'] = read_float(f)
         mat_param['val5'] = read_float(f)
         name = read_uint(f)
-        mat_param['type'] = f.read(1)[0] # Type (0 is value, 1 is Vector2, 2 is color, 3 is alpha color, 4+ ?)
+        mat_param['type'] = f.read(1)[0] # Type (0 is value, 1 is X/Y, 2 is color, 4 is alpha color)
         mat_param['size'] = f.read(1)[0] # Number of values used in type
         f.read(2) # Always zero, padding
         next = f.tell()
@@ -196,14 +199,15 @@ def parse_materials(f, count, offset, name_table):
         material = {}
         base = f.tell()
         material['index'] = read_ushort(f)
-        material['unk0'] = read_ushort(f)
+        material['render_priority'] = f.read(1)[0]
+        material['render_layer'] = f.read(1)[0]
         material_name = read_uint(f)
         shader = read_uint(f)
         param_offset = read_uint(f)
         param_count = read_uint(f)
         txr_offset = read_uint(f)
         txr_count = read_uint(f)
-        material['unk1'] = read_uint(f)
+        material['render_type'] = read_uint(f)
         next = f.tell()
         assert next - base == 32
 
@@ -251,8 +255,10 @@ def parse_indices(f, count, offset):
 def parse_vertices(f, count, offset, layout, vertex_size):
     vertices = []
     f.seek(offset)
+    # For each vertices
     for i in range(count):
         vertex = {}
+        # For each layout type
         for j in range(len(layout)):
             elem = layout[j]
             array = []
@@ -285,9 +291,12 @@ def parse_meshes(f, count, offset):
     for i in range(count):
         mesh = {}
         base = f.tell()
-        mesh['unk0'] = read_uint(f)
+        mesh['unk0'] = f.read(1)[0]
+        mesh['skinned'] = f.read(1)[0]
+        mesh['bones'] = f.read(1)[0]
+        mesh['unk1'] = f.read(1)[0]
         mesh['material'] = read_int(f)
-        f.read(4) # Always zero
+        mesh['material2'] = read_int(f)
         layout_offset = read_uint(f)
         mesh['vertex_size'] = read_ushort(f)
         layout_count = read_ushort(f)
@@ -468,6 +477,11 @@ def load(operator, context, filepath='', **kwargs):
     for mdb_material in mdb['materials']:
         lshader = mdb_material['shader'].lower()
         material = bpy.data.materials.new(mdb_material['name'])
+        # Custom properties
+        material['render_priority'] = mdb_material['render_priority']
+        material['render_layer'] = mdb_material['render_layer']
+        material['render_type'] = mdb_material['render_type']
+        
         if lshader.endswith('_alpha') or lshader.endswith('_hair'):
             material.blend_method = 'HASHED'
         elif lshader.endswith('_clip'):
@@ -587,9 +601,15 @@ def load(operator, context, filepath='', **kwargs):
             bone.matrix = bone.parent.matrix @ mdb_bone['matrix_local']
         else:
             bone.matrix = bone_up_Y @ mdb_bone['matrix_local']
+        # Until we know what these do, we just preserve them
+        bone['group'] = mdb_bone['group']
+        bone['unknown_ints'] = [int(mdb_bone['unk1']), int(mdb_bone['unk2'])]
+        bone['unknown_floats'] = [float(mdb_bone['unk3']), float(mdb_bone['unk4']),
+                                  float(mdb_bone['unk5']), float(mdb_bone['unk6']),
+                                  float(mdb_bone['unk7']), float(mdb_bone['unk8']),
+                                  float(mdb_bone['unk9']), float(mdb_bone['unk10'])]
         # Add bone to bone list
         bones.append(bone)
-
     bpy.ops.object.mode_set(mode='OBJECT')
 
     # Add meshes
@@ -634,8 +654,6 @@ def load(operator, context, filepath='', **kwargs):
                     normals.append((x, -z, y))
                 mesh.normals_split_custom_set_from_vertices(normals)
                 mesh.use_auto_smooth = True # Enable custom normals
-
-            # TODO: Binormals and tangents?
 
             # Add UV maps
             for i in range(4):

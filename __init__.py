@@ -1,7 +1,7 @@
 bl_info = {
     "name": "MDB format",
-    "author": "BlueAmulet",
-    "version": (1, 1, 2),
+    "author": "BlueAmulet / Smileynator",
+    "version": (1, 5, 0),
     "blender": (2, 90, 0),
     "location": "File > Import-Export",
     "description": "Import-Export MDB, mesh, UV's, materials and textures from Earth Defense Force",
@@ -70,6 +70,11 @@ class ExportMDB(bpy.types.Operator, ExportHelper):
 
     def draw(self, context):
         pass
+
+    @classmethod
+    def poll(cls, context):
+        # Ensure user has left Edit mode, so the meshes we export are up to date.
+        return (context.active_object is not None) and (not context.active_object.mode == 'EDIT')
 
 
 def menu_func_import(self, context):
