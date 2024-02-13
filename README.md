@@ -41,7 +41,7 @@ Custom Properties you should know about:
   - Render Type is almost always 3, but seems to be set to 2 for objects which "update" their texture, like fill bars, or the shield bearer's shield.
 
 ## Extra Tools, Docs, and Links
-Tools: https://github.com/KCreator/Earth-Defence-Force-Documentation/wiki/Tools
+Other Tools: https://github.com/KCreator/Earth-Defence-Force-Documentation/wiki/Tools
 
 File format: https://github.com/KCreator/Earth-Defence-Force-Documentation/wiki/MDB-Format
 
