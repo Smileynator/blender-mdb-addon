@@ -42,7 +42,9 @@ Custom Properties you should know about:
 
 ## Extra Tools, Docs, and Links
 Tools: https://github.com/KCreator/Earth-Defence-Force-Documentation/wiki/Tools
+
 File format: https://github.com/KCreator/Earth-Defence-Force-Documentation/wiki/MDB-Format
+
 Discord: https://discord.gg/edf
 
 EARTH DEFENSE FORCE is the registered trademark of SANDLOT and D3 PUBLISHER INC. This project is not affiliated with or endorsed by SANDLOT or D3 PUBLISHER INC in any way.
