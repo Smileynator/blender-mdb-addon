@@ -29,7 +29,7 @@ Models make use of some extra data we either cannot support in Blender or do not
 
 Model animations and hitboxes are not stored in the model file, these have to be edited externally.
 
-The game interally heavily relies on specific naming structures we have not defined yet. So renaming or removing of Bones, Materials and Objects is highly discouraged. Doing this any way might result in incorrect dismemberment mechanics, crashes during gameplay, broken animations, missing hitboxes, etc.
+The game interally heavily relies on specific naming structures we have not defined yet. So renaming or removing of Bones, Materials and Objects is highly discouraged. Doing this anyway might result in incorrect dismemberment mechanics, crashes during gameplay, broken animations, missing hitboxes, etc.
 
 Try keeping editing of the materials to a minimal, mostly they are for setting up textures as well as default variables the game uses, the rest is purely there to ensure blender renders it somewhat properly as a preview.
 
