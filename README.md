@@ -1,6 +1,6 @@
 # Blender MDB Addon
 Blender model importer/exporter for Earth Defense Force (4.1?) & 5's .mdb files.  
-Supported versions of blender are 2.90 to 4.0.2, newer versions not guaranteed.
+Supported version of blender is 3.6, older and newer versions not guaranteed, but might be supported later if demand is high and support isn't hard to create.
 
 ## Download
 https://github.com/Smileynator/blender-mdb-addon/archive/refs/heads/master.zip
