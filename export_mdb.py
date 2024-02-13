@@ -102,11 +102,6 @@ def get_bone_data(names):
         bone_data['first_child'] = blender_bones[bone.children[0]] if bone.children else -1
         bone_data['name_index'] = names.index(bone.name)
         bone_data['child_count'] = len(bone.children)
-        bone_data['group'] = 0
-        for i in range(4):
-            if bone.layers[i]:
-                bone_data['group'] = i
-                break
         # Unpack the 4x4 matrices into a flat list of 16 float values
         # Local matrix back to file format
         matrix = bone_up_Y.inverted() @ bone.matrix_local
