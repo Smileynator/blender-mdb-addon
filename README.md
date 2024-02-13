@@ -24,9 +24,13 @@ Import .mdb under "File->Import->Earth Defense Force (.mdb)"
 Export .mdb under "File->Export->Earth Defense Force (.mdb)"
 
 Shader details might be incomplete, but most of the visual aspects should be there.
+
 Models make use of some extra data we either cannot support in Blender or do not know what they exactly do. For the time being those are stored as Custom Properties on the Bones and Materials.
+
 Model animations and hitboxes are not stored in the model file, these have to be edited externally.
+
 The game interally heavily relies on specific naming structures we have not defined yet. So renaming or removing of Bones, Materials and Objects is highly discouraged. Doing this any way might result in incorrect dismemberment mechanics, crashes during gameplay, broken animations, missing hitboxes, etc.
+
 Try keeping editing of the materials to a minimal, mostly they are for setting up textures as well as default variables the game uses, the rest is purely there to ensure blender renders it somewhat properly as a preview.
 
 Custom Properties you should know about:
