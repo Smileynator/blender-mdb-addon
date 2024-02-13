@@ -32,9 +32,9 @@ Try keeping editing of the materials to a minimal, mostly they are for setting u
 Custom Properties you should know about:
 - Bones have 'unknown_ints[0]' that might be related to groupings. the value 3 seems to be assigned to all bones that actually need to hold meshes that have weight painting.
 - Materials have 3 custom properties.
-- Render Priority is literral ordering. If 2 transparent objects exist, and one has higher render priority, it will show up in the front.
-- Render Layer is normally 0 for opaque objects, and 2 on transparent and UI elements.
-- Render Type is almost always 3, but seems to be set to 2 for objects which "update" their texture, like fill bars, or the shield bearer's shield.
+  - Render Priority is literral ordering. If 2 transparent objects exist, and one has higher render priority, it will show up in the front.
+  - Render Layer is normally 0 for opaque objects, and 2 on transparent and UI elements.
+  - Render Type is almost always 3, but seems to be set to 2 for objects which "update" their texture, like fill bars, or the shield bearer's shield.
 
 ## Extra Tools, Docs, and Links
 Tools: https://github.com/KCreator/Earth-Defence-Force-Documentation/wiki/Tools
