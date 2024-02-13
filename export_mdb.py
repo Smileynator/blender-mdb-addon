@@ -3,7 +3,6 @@
 
 import bpy
 import struct
-import pprint
 import mathutils
 import numpy as np
 
@@ -47,20 +46,30 @@ def write_header(file, names, bones, objects, materials, textures):
 
 
 def get_unique_names():
-    names = set()
-    # Get all object names
-    for object in bpy.data.objects:
-        if object.data is None:
-            names.add(object.name)
+    names_set = set()
+    names_list = []
+    # Note, bones come first, and in the exact order
+    # Messing this up causes the game to break frogs and other detaching limb systems.
 
     # Get all bone names
     for bone in bpy.data.armatures[0].bones:
-        names.add(bone.name)
+        if bone.name not in names_set:
+            names_set.add(bone.name)
+            names_list.append(bone.name)
+
+    # Get all object names
+    for object in bpy.data.objects:
+        if object.data is None:
+            if object.name not in names_set:
+                names_set.add(object.name)
+                names_list.append(object.name)
 
     # Get all material names
     for material in bpy.data.materials:
-        names.add(material.name)
-    return list(names)
+        if material.name not in names_set:
+            names_set.add(material.name)
+            names_list.append(material.name)
+    return names_list
 
 
 def get_bone_data(names):
@@ -76,6 +85,7 @@ def get_bone_data(names):
     for bone in armature.bones:
         bone_data = {}
         bone_data['index'] = blender_bones[bone]
+        bone_data['name'] = bone.name
         bone_data['parent'] = blender_bones[bone.parent] if bone.parent else -1
         bone_data['next_sibling'] = -1
         # Find next sibling if any
@@ -222,7 +232,6 @@ def get_materials(indexed_strings, textures):
         material_data['textures'] = texture_data
         material_data['texture_count'] = len(texture_data)
         material_data['texture_offset'] = 0
-        #TODO unknown value
         materials.append(material_data)
     return materials
 
@@ -326,7 +335,6 @@ def write_material_data(file, materials, ascii_strings, utf16_strings):
     for material in materials:
         # Parameters
         parameters_pos = file.tell()
-        #print(f'Writing parameters: {material["mat_name"]} at {parameters_pos}')
         rewrite_offset(file, material['parameter_pos'], parameters_pos, material['base_pos'])
         for parameter in material['parameters']:
             base_pos = file.tell()
@@ -344,7 +352,6 @@ def write_material_data(file, materials, ascii_strings, utf16_strings):
             
         # Textures
         textures_pos = file.tell()
-        #print(f'Writing textures: {material["mat_name"]} at {textures_pos}')
         rewrite_offset(file, material['texture_pos'], textures_pos, material['base_pos'])
         for texture in material['textures']:
             base_pos = file.tell()
@@ -374,6 +381,7 @@ def get_objects(names, materials):
             continue
         object_data = {
             'index': obj_index,
+            'name': obj.name,
             'name_index': names.index(obj.name),
         }
         # Get all meshes
@@ -540,7 +548,6 @@ def get_vertices_data(mesh, is_skinned):
 
 def write_object_data(file, objects, ascii_strings):
     for object in objects:
-        #print(f'Writing Object: {object["index"]} - {object["name_index"]} - {object["mesh_count"]}')
         # Write object info
         object['base_pos'] = file.tell()
         file.write(struct.pack('I', object['index']))
@@ -559,7 +566,6 @@ def write_object_data(file, objects, ascii_strings):
 def write_mesh_data(file, object, ascii_strings):
     # Write Mesh info
     for mesh in object['mesh_data']:
-        #print(f'Writing Mesh: Obj{object["index"]} Mesh:{mesh["mesh_index"]} - {mesh["vertices_count"]} - {mesh["indices_count"]}')
         mesh['base_pos'] = file.tell()
         file.write(bytes([0x00]))  # Unknown bool
         file.write(struct.pack('B', mesh['skinned_mesh']))
@@ -594,7 +600,6 @@ def write_mesh_data(file, object, ascii_strings):
                 'write_pos': file.tell()
             })
             file.write(struct.pack('I', 0))
-
 
 def write_vertex_data(file, object):
     # Write all indices
@@ -673,6 +678,14 @@ def write_utf16_strings(file, utf16_strings):
         rewrite_offset(file, string_data['write_pos'], string_pos, string_data['base_pos'])
     file.seek(last_pos)
 
+def sort_objects_by_name_order(array_to_sort, reference_array):
+    # Create a dictionary to store the index of each object's name in the reference array
+    name_index_map = {obj['name']: i for i, obj in enumerate(reference_array)}
+
+    # Sort the main array based on the index of each object's name in the reference array
+    sorted_array = sorted(array_to_sort, key=lambda x: name_index_map.get(x['name'], len(reference_array)))
+
+    return sorted_array
 
 def save(operator, context, filepath="", **kwargs):
     # Get the name table
@@ -684,6 +697,9 @@ def save(operator, context, filepath="", **kwargs):
     texture_names = get_textures()
     materials = get_materials(indexed_strings, texture_names)
     objects = get_objects(indexed_strings, materials)
+
+    # Sort all the objects by bone name order
+    objects = sort_objects_by_name_order(objects, bones)
     
     with open(filepath, 'wb') as file:
         # Write header
