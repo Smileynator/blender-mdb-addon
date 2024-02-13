@@ -6,6 +6,7 @@ Supported versions of blender are 2.90 to 4.0.2, newer versions not guaranteed.
 https://github.com/Smileynator/blender-mdb-addon/archive/refs/heads/master.zip
 
 Please leave any problems as an Issue with logs and screenshots if possible.
+Very little error catching has been implemented, so expect some problems.
 
 ## Features
 - Importing of any .mdb Model
