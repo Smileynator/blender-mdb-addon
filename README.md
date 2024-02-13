@@ -18,10 +18,10 @@ Very little error catching has been implemented, so expect some problems.
 - UV Mapping support
 
 ## Usage Notes and Warnings
-Install blender-mdb-addon-master.zip in Blender Preferences.  
-Enable "Import-Export: MDB format" and save preferences.
-Import .mdb under "File->Import->Earth Defense Force (.mdb)"
-Export .mdb under "File->Export->Earth Defense Force (.mdb)"
+- Install blender-mdb-addon-master.zip in Blender Preferences.
+- Enable "Import-Export: MDB format" and save preferences.
+- Import .mdb under "File->Import->Earth Defense Force (.mdb)"
+- Export .mdb under "File->Export->Earth Defense Force (.mdb)"
 
 Shader details might be incomplete, but most of the visual aspects should be there.
 
