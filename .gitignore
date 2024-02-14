@@ -1,3 +1,4 @@
 __pycache__/
 *.py[codi]
 blender-mdb-addon-master.zip
+.idea/
