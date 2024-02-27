@@ -1,10 +1,10 @@
 bl_info = {
-    "name": "MDB format",
+    "name": "Earth Defense Force Formats",
     "author": "BlueAmulet / Smileynator",
     "version": (1, 5, 0),
     "blender": (2, 90, 0),
     "location": "File > Import-Export",
-    "description": "Import-Export MDB, mesh, UV's, materials and textures from Earth Defense Force",
+    "description": "Import-Export MDB, mesh, UV's, materials, textures, Animations from Earth Defense Force",
     "warning": "",
     #"doc_url": "",
     "support": 'COMMUNITY',
@@ -18,6 +18,8 @@ if "bpy" in locals():
         importlib.reload(import_mdb)
     if "export_mdb" in locals():
         importlib.reload(export_mdb)
+    if "import_canm" in locals():
+        importlib.reload(import_canm)
 
 
 import bpy
@@ -77,17 +79,39 @@ class ExportMDB(bpy.types.Operator, ExportHelper):
         return (context.active_object is not None) and (not context.active_object.mode == 'EDIT')
 
 
+class ImportCANM(bpy.types.Operator, ImportHelper):
+    """Load a CANM file"""
+    bl_idname = "import_scene.canm"
+    bl_label = "Import CANM"
+    bl_options = {'UNDO', 'PRESET'}
+
+    filename_ext = ".canm"
+    filter_glob: StringProperty(default="*.canm", options={'HIDDEN'})
+
+    def execute(self, context):
+        from . import import_canm
+
+        keywords = self.as_keywords(ignore=())
+
+        return import_canm.load(self, context, **keywords)
+
+    def draw(self, context):
+        pass
+
+
 def menu_func_import(self, context):
-    self.layout.operator(ImportMDB.bl_idname, text="Earth Defense Force (.mdb)")
+    self.layout.operator(ImportMDB.bl_idname, text="Earth Defense Force Model (.mdb)")
+    self.layout.operator(ImportCANM.bl_idname, text="Earth Defense Force Animations (.canm)")
 
 
 def menu_func_export(self, context):
-    self.layout.operator(ExportMDB.bl_idname, text="Earth Defense Force (.mdb)")
+    self.layout.operator(ExportMDB.bl_idname, text="Earth Defense Force Model (.mdb)")
 
 
 classes = (
     ImportMDB,
     ExportMDB,
+    ImportCANM,
 )
 
 
