@@ -23,6 +23,8 @@ Very little error catching has been implemented, so expect some problems.
 - Import .mdb under "File->Import->Earth Defense Force (.mdb)"
 - Export .mdb under "File->Export->Earth Defense Force (.mdb)"
 
+Exporting will fail if the model contains N-gons. (Tangent space can only be computed for tris/quads)
+
 Shader details might be incomplete, but most of the visual aspects should be there.
 
 Models make use of some extra data we either cannot support in Blender or do not know what they exactly do. For the time being those are stored as Custom Properties on the Bones and Materials.
