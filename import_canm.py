@@ -4,11 +4,18 @@
 import os
 import pprint
 import bpy
+import math
 import mathutils
 import numpy as np
 
 from mathutils import Vector
 from struct import pack, unpack
+
+# Original model is Y UP, but blender is Z UP by default, we convert that here.
+bone_up_Y = mathutils.Matrix(((1.0, 0.0, 0.0, 0.0),
+                              (0.0, 0.0, -1.0, 0.0),
+                              (0.0, 1.0, 0.0, 0.0),
+                              (0.0, 0.0, 0.0, 1.0)))
 
 # Read helper functions
 def read_ushort(file):
@@ -65,7 +72,7 @@ def parse_anm_data(f, anm_data_count, anm_data_offset):
         name = read_int(f)
         data['duration'] = read_float(f)
         data['real_dur'] = read_float(f)
-        data['dur_mult'] = read_uint(f)
+        data['keyframe_count'] = read_uint(f)
         bone_data_count = read_uint(f)
         bone_data_offset = read_uint(f)
         next = f.tell()
@@ -87,10 +94,9 @@ def parse_keyframes(f, keyframe_count, keyframe_offset):
     for i in range(keyframe_count):
         data = {}
         base = f.tell()
-        # Note: x, -z, y for up transform changes!
         data['max_x'] = np.float(read_ushort(f))
+        data['max_y'] = np.float(read_ushort(f))
         data['max_z'] = np.float(read_ushort(f))
-        data['max_y'] = -np.float(read_ushort(f))
         next = f.tell()
         assert next - base == 0x06
         keyframes.append(data)
@@ -105,13 +111,12 @@ def parse_anm_point(f, anm_point_count, anm_point_offset):
         base = f.tell()
         point['keyframe'] = read_ushort(f) == 1
         keyframe_count = read_ushort(f)
-        # Note: x, -z, y for up transform changes!
         point['trans_x'] = read_float(f)
+        point['trans_y'] = read_float(f)
         point['trans_z'] = read_float(f)
-        point['trans_y'] = -read_float(f)
         point['speed_x'] = read_float(f)
-        point['speed_z'] = read_float(f)
         point['speed_y'] = read_float(f)
+        point['speed_z'] = read_float(f)
         keyframe_offset = read_int(f)
         next = f.tell()
         assert next - base == 0x20
@@ -154,11 +159,11 @@ def parse_canm(f):
     anm_point_offset = read_uint(f)
     anm_bone_count = read_uint(f)
     anm_bone_offset = read_uint(f)
-    
+
     canm['animations'] = parse_anm_data(f, anm_data_count, anm_data_offset)
-    canm['anm_point'] = parse_anm_point(f, anm_point_count, anm_point_offset)
-    canm['bones'] = parse_bone_names(f, anm_bone_count, anm_bone_offset)
-        
+    canm['anm_points'] = parse_anm_point(f, anm_point_count, anm_point_offset)
+    canm['bone_names'] = parse_bone_names(f, anm_bone_count, anm_bone_offset)
+
     return canm
 
 
@@ -170,32 +175,43 @@ def create_action_with_animation(armature_obj, animation, canm):
     if armature_obj.animation_data is None:
         armature_obj.animation_data_create()
     armature_obj.animation_data.action = action
-    # Generate keyframes
+    # Get the actual max length of the animation
+    keyframes = animation["keyframe_count"]
+    print(f'Keyframes in {animation["name"]}: {keyframes}')
+    # Warn missing bones
     for bone_anim in animation['bone_data']:
-        bone_name = canm['bones'][bone_anim['bone_id']]
+        bone_name = canm['bone_names'][bone_anim['bone_id']]
         pose_bone = armature_obj.pose.bones.get(bone_name)
+        # Skip bones not found TODO figure out how to store these anyway
         if not pose_bone:
             print(f'Could not find bone: {bone_name}')
             continue
-        
-        # Get relevant animation data
-        keyframes = 0
-        pos_anim = None
-        if bone_anim['point_trans_id'] != -1:
-            pos_anim = canm['anm_point'][bone_anim['point_trans_id']]
-            print(f"Bone {bone_name} has pos anim KF:{len(pos_anim['keyframes'])}")
-            if len(pos_anim['keyframes']) > keyframes:
-                keyframes = len(pos_anim['keyframes'])
-        rot_anim = None
-        if bone_anim['point_rot_id'] != -1:
-            rot_anim = canm['anm_point'][bone_anim['point_rot_id']]
-            print(f"Bone {bone_name} has rot anim KF:{len(rot_anim['keyframes'])}")
-            if len(rot_anim['keyframes']) > keyframes:
-                keyframes = len(rot_anim['keyframes'])
+    # For each keyframe, generate entire bone structure from the root upward
+    for i in range(keyframes):
+        # Reset all bone poses
+        for pose_bone in armature_obj.pose.bones:
+            pose_bone.matrix_basis = mathutils.Matrix.Identity(4)
+        # Read from this frame
+        bpy.context.scene.frame_set(i)
+        # Go over every bone in the armature
+        for pose_bone in armature_obj.pose.bones:
+            try:
+                bone_index = canm['bone_names'].index(pose_bone.name)
+            except ValueError:
+                continue  # Skip the bone, no animations
+            bone_anim = animation['bone_data'][bone_index]
 
-        # Generate matrix for every every keyframe
-        print(f"Bone {bone_name} iterating KF:{keyframes}")
-        for i in range(keyframes):
+            # Get animation data for this bone
+            pos_anim = None
+            if bone_anim['point_trans_id'] != -1:
+                pos_anim = canm['anm_points'][bone_anim['point_trans_id']]
+            rot_anim = None
+            if bone_anim['point_rot_id'] != -1:
+                rot_anim = canm['anm_points'][bone_anim['point_rot_id']]
+            unk_anim = None
+            if bone_anim['point_unk1_id'] != -1:
+                unk_anim = canm['anm_points'][bone_anim['point_unk1_id']]
+            # Generate matrix for this bone
             # Position
             pos_mat = mathutils.Matrix.Identity(4)
             set_pos = False
@@ -214,30 +230,24 @@ def create_action_with_animation(armature_obj, animation, canm):
                 z = mathutils.Matrix.Rotation(rot_anim['trans_z'] + rot_anim['keyframes'][i]['max_z'] * rot_anim['speed_z'], 4, 'Z')
                 rot_mat = x @ y @ z
                 set_rot = True
-
-            bone_mat = pos_mat @ rot_mat
-
+            # Final local offset matrix
+            new_bone_matrix = pos_mat @ rot_mat
             # Get the parent bone matrix
             if pose_bone.parent:
+                bpy.context.scene.frame_set(i)
                 parent_bone_matrix = pose_bone.parent.matrix
             else:
-                parent_bone_matrix = mathutils.Matrix.Identity(4)
-            # Get the new relative bone matrix
-            relative_bone_matrix = bone_mat @ parent_bone_matrix
-
+                # Correcting the root for correct UP
+                parent_bone_matrix = bone_up_Y
             # Set bone matrix and save keyframes
-            pose_bone.matrix = relative_bone_matrix
+            pose_bone.matrix = parent_bone_matrix @ new_bone_matrix
             if set_pos:
                 pose_bone.keyframe_insert(data_path='location', frame=i)
             if set_rot:
                 pose_bone.keyframe_insert(data_path='rotation_quaternion', frame=i)
-            
+
     # Reset all bone poses
-    for bone_anim in animation['bone_data']:
-        bone_name = canm['bones'][bone_anim['bone_id']]
-        pose_bone = armature_obj.pose.bones.get(bone_name)
-        if not pose_bone:
-            continue
+    for pose_bone in armature_obj.pose.bones:
         pose_bone.matrix_basis = mathutils.Matrix.Identity(4)
 
     # Add action to NLA track and clear the current track
