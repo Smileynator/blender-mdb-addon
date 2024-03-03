@@ -8,12 +8,6 @@ import numpy as np
 from mathutils import Vector
 from struct import unpack
 
-# Original model is Y UP, but blender is Z UP by default, we convert that here.
-bone_up_Y = mathutils.Matrix(((1.0, 0.0, 0.0, 0.0),
-                              (0.0, 0.0, -1.0, 0.0),
-                              (0.0, 1.0, 0.0, 0.0),
-                              (0.0, 0.0, 0.0, 1.0)))
-
 # Read helper functions
 def read_ushort(file):
     return unpack('<H', file.read(2))[0]
