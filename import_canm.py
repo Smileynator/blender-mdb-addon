@@ -94,9 +94,9 @@ def parse_keyframes(f, keyframe_count, keyframe_offset):
     for i in range(keyframe_count):
         data = {}
         base = f.tell()
-        data['max_x'] = np.float(read_ushort(f))
-        data['max_y'] = np.float(read_ushort(f))
-        data['max_z'] = np.float(read_ushort(f))
+        data['x'] = np.float(read_ushort(f))
+        data['y'] = np.float(read_ushort(f))
+        data['z'] = np.float(read_ushort(f))
         next = f.tell()
         assert next - base == 0x06
         keyframes.append(data)
@@ -111,9 +111,9 @@ def parse_anm_point(f, anm_point_count, anm_point_offset):
         base = f.tell()
         point['keyframe'] = read_ushort(f) == 1
         keyframe_count = read_ushort(f)
-        point['trans_x'] = read_float(f)
-        point['trans_y'] = read_float(f)
-        point['trans_z'] = read_float(f)
+        point['base_x'] = read_float(f)
+        point['base_y'] = read_float(f)
+        point['base_z'] = read_float(f)
         point['speed_x'] = read_float(f)
         point['speed_y'] = read_float(f)
         point['speed_z'] = read_float(f)
@@ -177,7 +177,6 @@ def create_action_with_animation(armature_obj, animation, canm):
     armature_obj.animation_data.action = action
     # Get the actual max length of the animation
     keyframes = animation["keyframe_count"]
-    print(f'Keyframes in {animation["name"]}: {keyframes}')
     # Warn missing bones
     for bone_anim in animation['bone_data']:
         bone_name = canm['bone_names'][bone_anim['bone_id']]
@@ -188,11 +187,6 @@ def create_action_with_animation(armature_obj, animation, canm):
             continue
     # For each keyframe, generate entire bone structure from the root upward
     for i in range(keyframes):
-        # Reset all bone poses
-        for pose_bone in armature_obj.pose.bones:
-            pose_bone.matrix_basis = mathutils.Matrix.Identity(4)
-        # Read from this frame
-        bpy.context.scene.frame_set(i)
         # Go over every bone in the armature
         for pose_bone in armature_obj.pose.bones:
             try:
@@ -200,7 +194,6 @@ def create_action_with_animation(armature_obj, animation, canm):
             except ValueError:
                 continue  # Skip the bone, no animations
             bone_anim = animation['bone_data'][bone_index]
-
             # Get animation data for this bone
             pos_anim = None
             if bone_anim['point_trans_id'] != -1:
@@ -211,34 +204,34 @@ def create_action_with_animation(armature_obj, animation, canm):
             unk_anim = None
             if bone_anim['point_unk1_id'] != -1:
                 unk_anim = canm['anm_points'][bone_anim['point_unk1_id']]
+            if unk_anim:
+                print(f'{animation["name"]} has unk anim on bone {pose_bone.name}')
             # Generate matrix for this bone
             # Position
             pos_mat = mathutils.Matrix.Identity(4)
             set_pos = False
             if pos_anim and len(pos_anim['keyframes']) > i:
-                x = pos_anim['trans_x'] + pos_anim['keyframes'][i]['max_x'] * pos_anim['speed_x']
-                y = pos_anim['trans_y'] + pos_anim['keyframes'][i]['max_y'] * pos_anim['speed_y']
-                z = pos_anim['trans_z'] + pos_anim['keyframes'][i]['max_z'] * pos_anim['speed_z']
+                x = pos_anim['base_x'] + pos_anim['keyframes'][i]['x'] * pos_anim['speed_x']
+                y = pos_anim['base_y'] + pos_anim['keyframes'][i]['y'] * pos_anim['speed_y']
+                z = pos_anim['base_z'] + pos_anim['keyframes'][i]['z'] * pos_anim['speed_z']
                 pos_mat = mathutils.Matrix.Translation(Vector((x, y, z)))
                 set_pos = True
             # Rotation
             rot_mat = mathutils.Matrix.Identity(4)
             set_rot = False
             if rot_anim and len(rot_anim['keyframes']) > i:
-                x = mathutils.Matrix.Rotation(rot_anim['trans_x'] + rot_anim['keyframes'][i]['max_x'] * rot_anim['speed_x'], 4, 'X')
-                y = mathutils.Matrix.Rotation(rot_anim['trans_y'] + rot_anim['keyframes'][i]['max_y'] * rot_anim['speed_y'], 4, 'Y')
-                z = mathutils.Matrix.Rotation(rot_anim['trans_z'] + rot_anim['keyframes'][i]['max_z'] * rot_anim['speed_z'], 4, 'Z')
-                rot_mat = x @ y @ z
+                x = mathutils.Matrix.Rotation(rot_anim['base_x'] + rot_anim['keyframes'][i]['x'] * rot_anim['speed_x'], 4, 'X')
+                y = mathutils.Matrix.Rotation(rot_anim['base_y'] + rot_anim['keyframes'][i]['y'] * rot_anim['speed_y'], 4, 'Y')
+                z = mathutils.Matrix.Rotation(rot_anim['base_z'] + rot_anim['keyframes'][i]['z'] * rot_anim['speed_z'], 4, 'Z')
+                rot_mat = z @ y @ x
                 set_rot = True
             # Final local offset matrix
             new_bone_matrix = pos_mat @ rot_mat
             # Get the parent bone matrix
             if pose_bone.parent:
-                bpy.context.scene.frame_set(i)
                 parent_bone_matrix = pose_bone.parent.matrix
             else:
-                # Correcting the root for correct UP
-                parent_bone_matrix = bone_up_Y
+                parent_bone_matrix = mathutils.Matrix.Identity(4)
             # Set bone matrix and save keyframes
             pose_bone.matrix = parent_bone_matrix @ new_bone_matrix
             if set_pos:
@@ -249,7 +242,6 @@ def create_action_with_animation(armature_obj, animation, canm):
     # Reset all bone poses
     for pose_bone in armature_obj.pose.bones:
         pose_bone.matrix_basis = mathutils.Matrix.Identity(4)
-
     # Add action to NLA track and clear the current track
     track = armature_obj.animation_data.nla_tracks.new()
     track.strips.new(action.name, 1, action)
@@ -273,9 +265,6 @@ def load(operator, context, filepath='', **kwargs):
 
     # Create animation timelines for each animation
     for index, animation in enumerate(canm['animations']):
-        if index >= 25:
-            break
-        print(f'Adding animation {animation["name"]}')
         # Create action for animation
         create_action_with_animation(armature_object, animation, canm)
     return {'FINISHED'}
