@@ -54,7 +54,7 @@ def parse_bone_data(f, bone_data_count, bone_data_offset):
         data['bone_id'] = read_ushort(f)
         data['point_trans_id'] = read_short(f)
         data['point_rot_id'] = read_short(f)
-        data['point_unk1_id'] = read_short(f)
+        data['point_scale_id'] = read_short(f)
         next = f.tell()
         assert next - base == 0x08
         
@@ -68,10 +68,10 @@ def parse_anm_data(f, anm_data_count, anm_data_offset):
     for i in range(anm_data_count):
         data = {}
         base = f.tell()
-        data['loop'] = read_uint(f)  # TODO confirm if loop boolean
+        data['loop'] = True if read_uint(f) == 1 else False
         name = read_int(f)
         data['duration'] = read_float(f)
-        data['real_dur'] = read_float(f)
+        data['frame_duration'] = read_float(f)
         data['keyframe_count'] = read_uint(f)
         bone_data_count = read_uint(f)
         bone_data_offset = read_uint(f)
@@ -175,6 +175,9 @@ def create_action_with_animation(armature_obj, animation, canm):
     if armature_obj.animation_data is None:
         armature_obj.animation_data_create()
     armature_obj.animation_data.action = action
+    # Set custom properties up
+    action['Loop'] = animation['loop']
+    action['Duration'] = animation['duration']
     # Get the actual max length of the animation
     keyframes = animation["keyframe_count"]
     # Warn missing bones
@@ -201,11 +204,9 @@ def create_action_with_animation(armature_obj, animation, canm):
             rot_anim = None
             if bone_anim['point_rot_id'] != -1:
                 rot_anim = canm['anm_points'][bone_anim['point_rot_id']]
-            unk_anim = None
-            if bone_anim['point_unk1_id'] != -1:
-                unk_anim = canm['anm_points'][bone_anim['point_unk1_id']]
-            if unk_anim:
-                print(f'{animation["name"]} has unk anim on bone {pose_bone.name}')
+            scale_anim = None
+            if bone_anim['point_scale_id'] != -1:
+                scale_anim = canm['anm_points'][bone_anim['point_scale_id']]
             # Generate matrix for this bone
             # Position
             pos_mat = mathutils.Matrix.Identity(4)
@@ -225,8 +226,18 @@ def create_action_with_animation(armature_obj, animation, canm):
                 z = mathutils.Matrix.Rotation(rot_anim['base_z'] + rot_anim['keyframes'][i]['z'] * rot_anim['speed_z'], 4, 'Z')
                 rot_mat = z @ y @ x
                 set_rot = True
+            # Scale (untested!)
+            scale_mat = mathutils.Matrix.Identity(4)
+            set_scale = False
+            if scale_anim and len(scale_anim['keyframes']) > i:
+                x = scale_anim['base_x'] + scale_anim['keyframes'][i]['x'] * scale_anim['speed_x']
+                y = scale_anim['base_y'] + scale_anim['keyframes'][i]['y'] * scale_anim['speed_y']
+                z = scale_anim['base_z'] + scale_anim['keyframes'][i]['z'] * scale_anim['speed_z']
+                scale_mat = mathutils.Matrix.Scale(1, 4, Vector((x, y, z)))
+                set_scale = True
+                
             # Final local offset matrix
-            new_bone_matrix = pos_mat @ rot_mat
+            new_bone_matrix = pos_mat @ rot_mat @ scale_mat
             # Get the parent bone matrix
             if pose_bone.parent:
                 parent_bone_matrix = pose_bone.parent.matrix
@@ -235,9 +246,11 @@ def create_action_with_animation(armature_obj, animation, canm):
             # Set bone matrix and save keyframes
             pose_bone.matrix = parent_bone_matrix @ new_bone_matrix
             if set_pos:
-                pose_bone.keyframe_insert(data_path='location', frame=i)
+                pose_bone.keyframe_insert(data_path='location', frame=i, group=pose_bone.name)
             if set_rot:
-                pose_bone.keyframe_insert(data_path='rotation_quaternion', frame=i)
+                pose_bone.keyframe_insert(data_path='rotation_quaternion', frame=i, group=pose_bone.name)
+            if set_scale:
+                pose_bone.keyframe_insert(data_path='scale', frame=i, group=pose_bone.name)
 
     # Reset all bone poses
     for pose_bone in armature_obj.pose.bones:
