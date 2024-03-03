@@ -1,15 +1,12 @@
 # CANM Animation importer for blender
 # Author: Smileynator
 
-import os
-import pprint
 import bpy
-import math
 import mathutils
 import numpy as np
 
 from mathutils import Vector
-from struct import pack, unpack
+from struct import unpack
 
 # Original model is Y UP, but blender is Z UP by default, we convert that here.
 bone_up_Y = mathutils.Matrix(((1.0, 0.0, 0.0, 0.0),
@@ -167,6 +164,55 @@ def parse_canm(f):
     return canm
 
 
+def get_bone_matrix_of_frame(canm, bone_anim, i):
+    # Get animation data for this bone
+    pos_anim = None
+    if bone_anim['point_trans_id'] != -1:
+        pos_anim = canm['anm_points'][bone_anim['point_trans_id']]
+    rot_anim = None
+    if bone_anim['point_rot_id'] != -1:
+        rot_anim = canm['anm_points'][bone_anim['point_rot_id']]
+    scale_anim = None
+    if bone_anim['point_scale_id'] != -1:
+        scale_anim = canm['anm_points'][bone_anim['point_scale_id']]
+    # Generate matrix for this bone
+    # Position
+    pos_mat = mathutils.Matrix.Identity(4)
+    set_pos = False
+    if pos_anim and len(pos_anim['keyframes']) > i:
+        x = pos_anim['base_x'] + pos_anim['keyframes'][i]['x'] * pos_anim['speed_x']
+        y = pos_anim['base_y'] + pos_anim['keyframes'][i]['y'] * pos_anim['speed_y']
+        z = pos_anim['base_z'] + pos_anim['keyframes'][i]['z'] * pos_anim['speed_z']
+        pos_mat = mathutils.Matrix.Translation(Vector((x, y, z)))
+        set_pos = True
+    # Rotation
+    rot_mat = mathutils.Matrix.Identity(4)
+    set_rot = False
+    if rot_anim and len(rot_anim['keyframes']) > i:
+        x = mathutils.Matrix.Rotation(rot_anim['base_x'] + rot_anim['keyframes'][i]['x'] * rot_anim['speed_x'], 4, 'X')
+        y = mathutils.Matrix.Rotation(rot_anim['base_y'] + rot_anim['keyframes'][i]['y'] * rot_anim['speed_y'], 4, 'Y')
+        z = mathutils.Matrix.Rotation(rot_anim['base_z'] + rot_anim['keyframes'][i]['z'] * rot_anim['speed_z'], 4, 'Z')
+        rot_mat = z @ y @ x
+        set_rot = True
+    # Scale (untested!)
+    scale_mat = mathutils.Matrix.Identity(4)
+    set_scale = False
+    if scale_anim and len(scale_anim['keyframes']) > i:
+        x = scale_anim['base_x'] + scale_anim['keyframes'][i]['x'] * scale_anim['speed_x']
+        y = scale_anim['base_y'] + scale_anim['keyframes'][i]['y'] * scale_anim['speed_y']
+        z = scale_anim['base_z'] + scale_anim['keyframes'][i]['z'] * scale_anim['speed_z']
+        scale_mat = mathutils.Matrix.Scale(1, 4, Vector((x, y, z)))
+        set_scale = True
+    # Final local offset matrix
+    return_object = {
+        'matrix': (pos_mat @ rot_mat @ scale_mat),
+        'pos': set_pos,
+        'rot': set_rot,
+        'scale': set_scale
+    }
+    return return_object
+
+
 def create_action_with_animation(armature_obj, animation, canm):
     bpy.context.view_layer.objects.active = armature_obj
     bpy.ops.object.mode_set(mode='POSE')
@@ -197,47 +243,10 @@ def create_action_with_animation(armature_obj, animation, canm):
             except ValueError:
                 continue  # Skip the bone, no animations
             bone_anim = animation['bone_data'][bone_index]
-            # Get animation data for this bone
-            pos_anim = None
-            if bone_anim['point_trans_id'] != -1:
-                pos_anim = canm['anm_points'][bone_anim['point_trans_id']]
-            rot_anim = None
-            if bone_anim['point_rot_id'] != -1:
-                rot_anim = canm['anm_points'][bone_anim['point_rot_id']]
-            scale_anim = None
-            if bone_anim['point_scale_id'] != -1:
-                scale_anim = canm['anm_points'][bone_anim['point_scale_id']]
-            # Generate matrix for this bone
-            # Position
-            pos_mat = mathutils.Matrix.Identity(4)
-            set_pos = False
-            if pos_anim and len(pos_anim['keyframes']) > i:
-                x = pos_anim['base_x'] + pos_anim['keyframes'][i]['x'] * pos_anim['speed_x']
-                y = pos_anim['base_y'] + pos_anim['keyframes'][i]['y'] * pos_anim['speed_y']
-                z = pos_anim['base_z'] + pos_anim['keyframes'][i]['z'] * pos_anim['speed_z']
-                pos_mat = mathutils.Matrix.Translation(Vector((x, y, z)))
-                set_pos = True
-            # Rotation
-            rot_mat = mathutils.Matrix.Identity(4)
-            set_rot = False
-            if rot_anim and len(rot_anim['keyframes']) > i:
-                x = mathutils.Matrix.Rotation(rot_anim['base_x'] + rot_anim['keyframes'][i]['x'] * rot_anim['speed_x'], 4, 'X')
-                y = mathutils.Matrix.Rotation(rot_anim['base_y'] + rot_anim['keyframes'][i]['y'] * rot_anim['speed_y'], 4, 'Y')
-                z = mathutils.Matrix.Rotation(rot_anim['base_z'] + rot_anim['keyframes'][i]['z'] * rot_anim['speed_z'], 4, 'Z')
-                rot_mat = z @ y @ x
-                set_rot = True
-            # Scale (untested!)
-            scale_mat = mathutils.Matrix.Identity(4)
-            set_scale = False
-            if scale_anim and len(scale_anim['keyframes']) > i:
-                x = scale_anim['base_x'] + scale_anim['keyframes'][i]['x'] * scale_anim['speed_x']
-                y = scale_anim['base_y'] + scale_anim['keyframes'][i]['y'] * scale_anim['speed_y']
-                z = scale_anim['base_z'] + scale_anim['keyframes'][i]['z'] * scale_anim['speed_z']
-                scale_mat = mathutils.Matrix.Scale(1, 4, Vector((x, y, z)))
-                set_scale = True
-                
+            # Get Bone Matrix
+            matrix_result = get_bone_matrix_of_frame(canm, bone_anim, i)
             # Final local offset matrix
-            new_bone_matrix = pos_mat @ rot_mat @ scale_mat
+            new_bone_matrix = matrix_result['matrix']
             # Get the parent bone matrix
             if pose_bone.parent:
                 parent_bone_matrix = pose_bone.parent.matrix
@@ -245,17 +254,16 @@ def create_action_with_animation(armature_obj, animation, canm):
                 parent_bone_matrix = mathutils.Matrix.Identity(4)
             # Set bone matrix and save keyframes
             pose_bone.matrix = parent_bone_matrix @ new_bone_matrix
-            if set_pos:
+            if matrix_result['pos']:
                 pose_bone.keyframe_insert(data_path='location', frame=i, group=pose_bone.name)
-            if set_rot:
+            if matrix_result['rot']:
                 pose_bone.keyframe_insert(data_path='rotation_quaternion', frame=i, group=pose_bone.name)
-            if set_scale:
+            if matrix_result['scale']:
                 pose_bone.keyframe_insert(data_path='scale', frame=i, group=pose_bone.name)
-
     # Reset all bone poses
     for pose_bone in armature_obj.pose.bones:
         pose_bone.matrix_basis = mathutils.Matrix.Identity(4)
-    # Add action to NLA track and clear the current track
+    # Push action to NLA track and clear the current track
     track = armature_obj.animation_data.nla_tracks.new()
     track.strips.new(action.name, 1, action)
     track.name = animation['name']
