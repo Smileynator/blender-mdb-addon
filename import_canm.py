@@ -170,9 +170,36 @@ def get_bone_matrix_of_frame(canm, bone_anim, i):
     if bone_anim['point_scale_id'] != -1:
         scale_anim = canm['anm_points'][bone_anim['point_scale_id']]
     # Generate matrix for this bone
-    # Position
     pos_mat = mathutils.Matrix.Identity(4)
     set_pos = False
+    rot_mat = mathutils.Matrix.Identity(4)
+    set_rot = False
+    scale_mat = mathutils.Matrix.Identity(4)
+    set_scale = False
+    if i == 0:  # First frame is just the fixed position for most bones, it overrides if it has keyframes
+        # Position
+        if pos_anim:
+            x = pos_anim['base_x']
+            y = pos_anim['base_y']
+            z = pos_anim['base_z']
+            pos_mat = mathutils.Matrix.Translation(Vector((x, y, z)))
+            set_pos = True
+        # Rotation
+        if rot_anim:
+            x = mathutils.Matrix.Rotation(rot_anim['base_x'], 4, 'X')
+            y = mathutils.Matrix.Rotation(rot_anim['base_y'], 4, 'Y')
+            z = mathutils.Matrix.Rotation(rot_anim['base_z'], 4, 'Z')
+            rot_mat = z @ y @ x
+            set_rot = True
+        # Scale (untested!)
+        if scale_anim:
+            x = scale_anim['base_x']
+            y = scale_anim['base_y']
+            z = scale_anim['base_z']
+            scale_mat = mathutils.Matrix.Scale(1, 4, Vector((x, y, z)))
+            set_scale = True
+    # If keyframes are present we override frame 0
+    # Position
     if pos_anim and len(pos_anim['keyframes']) > i:
         x = pos_anim['base_x'] + pos_anim['keyframes'][i]['x'] * pos_anim['speed_x']
         y = pos_anim['base_y'] + pos_anim['keyframes'][i]['y'] * pos_anim['speed_y']
@@ -180,8 +207,6 @@ def get_bone_matrix_of_frame(canm, bone_anim, i):
         pos_mat = mathutils.Matrix.Translation(Vector((x, y, z)))
         set_pos = True
     # Rotation
-    rot_mat = mathutils.Matrix.Identity(4)
-    set_rot = False
     if rot_anim and len(rot_anim['keyframes']) > i:
         x = mathutils.Matrix.Rotation(rot_anim['base_x'] + rot_anim['keyframes'][i]['x'] * rot_anim['speed_x'], 4, 'X')
         y = mathutils.Matrix.Rotation(rot_anim['base_y'] + rot_anim['keyframes'][i]['y'] * rot_anim['speed_y'], 4, 'Y')
@@ -189,8 +214,6 @@ def get_bone_matrix_of_frame(canm, bone_anim, i):
         rot_mat = z @ y @ x
         set_rot = True
     # Scale (untested!)
-    scale_mat = mathutils.Matrix.Identity(4)
-    set_scale = False
     if scale_anim and len(scale_anim['keyframes']) > i:
         x = scale_anim['base_x'] + scale_anim['keyframes'][i]['x'] * scale_anim['speed_x']
         y = scale_anim['base_y'] + scale_anim['keyframes'][i]['y'] * scale_anim['speed_y']
@@ -216,8 +239,8 @@ def create_action_with_animation(armature_obj, animation, canm):
         armature_obj.animation_data_create()
     armature_obj.animation_data.action = action
     # Set custom properties up
-    action['Loop'] = animation['loop']
-    action['Duration'] = animation['duration']
+    action['loop'] = animation['loop']
+    action['duration'] = animation['duration']
     # Get the actual max length of the animation
     keyframes = animation["keyframe_count"]
     # Warn missing bones
@@ -248,12 +271,13 @@ def create_action_with_animation(armature_obj, animation, canm):
                 parent_bone_matrix = mathutils.Matrix.Identity(4)
             # Set bone matrix and save keyframes
             pose_bone.matrix = parent_bone_matrix @ new_bone_matrix
+            # These need +1 because setting frame 0 and frame 1, both result in frame 1 being set.
             if matrix_result['pos']:
-                pose_bone.keyframe_insert(data_path='location', frame=i, group=pose_bone.name)
+                pose_bone.keyframe_insert(data_path='location', frame=i+1, group=pose_bone.name)
             if matrix_result['rot']:
-                pose_bone.keyframe_insert(data_path='rotation_quaternion', frame=i, group=pose_bone.name)
+                pose_bone.keyframe_insert(data_path='rotation_quaternion', frame=i+1, group=pose_bone.name)
             if matrix_result['scale']:
-                pose_bone.keyframe_insert(data_path='scale', frame=i, group=pose_bone.name)
+                pose_bone.keyframe_insert(data_path='scale', frame=i+1, group=pose_bone.name)
     # Reset all bone poses
     for pose_bone in armature_obj.pose.bones:
         pose_bone.matrix_basis = mathutils.Matrix.Identity(4)
