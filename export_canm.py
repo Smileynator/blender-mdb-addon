@@ -20,7 +20,7 @@ def get_bone_names():
                     if "pose.bones" in fcurve.data_path:
                         bone_name = fcurve.data_path.split('"')[1]
                         bone_names.add(bone_name)
-    return list(bone_names)
+    return list(sorted(bone_names))
 
 
 def get_bone_data(action, bone_names):
@@ -211,6 +211,11 @@ def check_duplicate_channel(channels, channel):
 # A channel is X Y Z values of postion, rotation or scale
 def get_channels(animations):
     channels = []
+    # Always add empty channel first
+    chan = {'has_frames': False, 'keyframes': 1, 'base_x': 0, 'base_y': 0, 'base_z': 0, 'speed_x': 0.0, 'speed_y': 0.0,
+            'speed_z': 0.0, 'offsets_x': [], 'offsets_y': [], 'offsets_z': []}
+    channels.append(chan)
+    # Now cover all animation channels
     for animation in animations:
         for bone in animation['bone_data']:
             if 'position' in bone:
@@ -241,23 +246,14 @@ def get_channels(animations):
     return channels
 
 
-def write_header(file, bone_names, animations):
+def write_header(file, bone_names, animations, channels):
     file.write(b'CANM')
     file.write(pack('I', 512))
     # Animation Data
     file.write(pack('I', len(animations)))
     file.write(pack('I', 0))
     # Animation Channels
-    channels = 0
-    for anim in animations:
-        for bone in anim['bone_data']:
-            if 'position' in bone:
-                channels += 1
-            if 'rotation' in bone:
-                channels += 1
-            if 'scale' in bone:
-                channels += 1
-    file.write(pack('I', channels))
+    file.write(pack('I', len(channels)))
     file.write(pack('I', 0))
     # Bone names
     file.write(pack('I', len(bone_names)))
@@ -352,10 +348,9 @@ def save(operator, context, filepath="", **kwargs):
     bone_names = get_bone_names()
     animations = get_animations(bone_names)
     channels = get_channels(animations)
-    
     with open(filepath, 'wb') as file:
         # Header
-        write_header(file, bone_names, animations)
+        write_header(file, bone_names, animations, channels)
         # Write header Channel Offset
         rewrite_offset(file, 0x14, file.tell(), 0x00)
         # Write all Channels
