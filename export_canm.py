@@ -262,6 +262,13 @@ def vector_to_channel(vector_array, has_frames):
         channel['base_x'] = vector_array[0].x
         channel['base_y'] = vector_array[0].y
         channel['base_z'] = vector_array[0].z
+        # yeet all really small values out
+        if are_close(0, channel['base_x']):
+            channel['base_x'] = 0.0
+        if are_close(0, channel['base_y']):
+            channel['base_y'] = 0.0
+        if are_close(0, channel['base_z']):
+            channel['base_z'] = 0.0
         channel['speed_x'] = 0.0
         channel['speed_y'] = 0.0
         channel['speed_z'] = 0.0
