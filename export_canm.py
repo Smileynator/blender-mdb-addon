@@ -23,12 +23,28 @@ def get_bone_names():
     return list(sorted(bone_names))
 
 
-def get_bone_data(action, bone_names):
+def get_pose_bones(bone_names):
+    bones = []
+    armature = bpy.data.armatures[0]
+    if not armature:
+        return
+    armature_object = None
+    for obj in bpy.data.objects:
+        if obj.type == 'ARMATURE' and obj.data == armature:
+            armature_object = obj
+            break
+    for bone_name in bone_names:
+        bones.append(armature_object.pose.bones.get(bone_name))
+    return bones
+
+
+def get_bone_data(action, bone_names, pose_bones):
     bones = []
     for bone_name in bone_names:
         bone = {}
         bone['bone_name'] = bone_name
         bone['index'] = bone_names.index(bone['bone_name'])
+        bone['pose_bone'] = pose_bones[bone['index']]
         data_path_loc = f'pose.bones["{bone_name}"].location'
         data_path_rot = f'pose.bones["{bone_name}"].rotation_quaternion'
         data_path_scale = f'pose.bones["{bone_name}"].scale'
@@ -57,7 +73,7 @@ def get_bone_data(action, bone_names):
     return bones
 
 
-def get_animations(bone_names):
+def get_animations(bone_names, pose_bones):
     actions = []
     for track in bpy.context.object.animation_data.nla_tracks:
         for strip in track.strips:
@@ -76,16 +92,9 @@ def get_animations(bone_names):
             max_keyframe = max(max_keyframe, kf.co[0])
         anim['keyframes'] = round(max_keyframe)
         anim['between_keyframes'] = anim['duration'] / (anim['keyframes'] - 1)
-        anim['bone_data'] = get_bone_data(action, bone_names)
+        anim['bone_data'] = get_bone_data(action, bone_names, pose_bones)
         animations.append(anim)
     return animations
-
-
-def get_curve_values(fcurve, frames):
-    values = []
-    for i in range(frames):
-        values.append(fcurve.evaluate(i+1))
-    return values
 
 
 def convert_to_ushort(array, min, diff):
@@ -95,89 +104,14 @@ def convert_to_ushort(array, min, diff):
     return [int(((val - min) * 0xFFFF)/diff) for val in array]
 
 
-def get_channel_from_curve(animation, fcurves):
-    channel = {}
-    channel['has_frames'] = True
-    channel['keyframes'] = animation['keyframes']
-    if len(fcurves[0].keyframe_points) == 1 and fcurves[0].keyframe_points[0].co.x == 1.0:
-        # Handle no keyframes
-        channel['has_frames'] = False
-        channel['keyframes'] = 1
-        if len(fcurves) == 4:
-            # Quaternion needs to be decomposed
-            w = fcurves[0].evaluate(1)
-            x = fcurves[1].evaluate(1)
-            y = fcurves[2].evaluate(1)
-            z = fcurves[3].evaluate(1)
-            euler = mathutils.Quaternion((w, x, y, z)).to_euler('XYZ')
-            channel['base_x'] = euler.x
-            channel['base_y'] = euler.y
-            channel['base_z'] = euler.z
-        else:
-            # Just X Y Z
-            channel['base_x'] = fcurves[0].evaluate(1)
-            channel['base_y'] = fcurves[1].evaluate(1)
-            channel['base_z'] = fcurves[2].evaluate(1)
-        channel['speed_x'] = 0.0
-        channel['speed_y'] = 0.0
-        channel['speed_z'] = 0.0
-        # Empty, cause no keyframes
-        channel['offsets_x'] = []
-        channel['offsets_y'] = []
-        channel['offsets_z'] = []
-    else:
-        # Handle with keyframes
-        if len(fcurves) == 4:
-            # Quaternion needs to be decomposed
-            w = get_curve_values(fcurves[0], channel['keyframes'])
-            x = get_curve_values(fcurves[1], channel['keyframes'])
-            y = get_curve_values(fcurves[2], channel['keyframes'])
-            z = get_curve_values(fcurves[3], channel['keyframes'])
-            x_values = []
-            y_values = []
-            z_values = []
-            for i in range(len(w)):
-                euler = mathutils.Quaternion((w[i], x[i], y[i], z[i])).to_euler('XYZ')
-                x_values.append(euler.x)
-                y_values.append(euler.y)
-                z_values.append(euler.z)
-        else:
-            x_values = get_curve_values(fcurves[0], channel['keyframes'])
-            y_values = get_curve_values(fcurves[1], channel['keyframes'])
-            z_values = get_curve_values(fcurves[2], channel['keyframes'])
-
-        # Process Keyframes per axis now that they are normalized
-        values = x_values
-        min_val = min(values)
-        max_val = max(values)
-        diff = max_val - min_val
-        channel['base_x'] = min_val
-        channel['speed_x'] = diff / 0xFFFF
-        channel['offsets_x'] = convert_to_ushort(values, min_val, diff)
-        
-        values = y_values
-        min_val = min(values)
-        max_val = max(values)
-        diff = max_val - min_val
-        channel['base_y'] = min_val
-        channel['speed_y'] = diff / 0xFFFF
-        channel['offsets_y'] = convert_to_ushort(values, min_val, diff)
-        
-        values = z_values
-        min_val = min(values)
-        max_val = max(values)
-        diff = max_val - min_val
-        channel['base_z'] = min_val
-        channel['speed_z'] = diff / 0xFFFF
-        channel['offsets_z'] = convert_to_ushort(values, min_val, diff)
-    return channel
-
 dupes = 0
 ezdupes = 0
 harddupes = 0
 
+
 def are_close(value1, value2, tolerance=1e-6):
     return abs(value1 - value2) < tolerance
+
 
 def check_duplicate_channel(channels, channel):
     global dupes
@@ -208,6 +142,171 @@ def check_duplicate_channel(channels, channel):
     return -1
 
 
+# Generate a matrix for every frame of the animation to read out later
+def get_matrix_channel_from_curves(animation, bone):
+    matrix_channels = {}
+    matrix_channels['position'] = []
+    matrix_channels['rotation'] = []
+    matrix_channels['scale'] = []
+    
+    keyframes = animation['keyframes']
+    pos_curves = None
+    pos_has_frames = False
+    rot_curves = None
+    rot_has_frames = False
+    scl_curves = None
+    scl_has_frames = False
+    if 'position' in bone:
+        pos_curves = bone['position']
+        pos_has_frames = not(len(pos_curves[0].keyframe_points) == 1 and pos_curves[0].keyframe_points[0].co.x == 1.0)
+        matrix_channels['position_frames'] = pos_has_frames
+    if 'rotation' in bone:
+        rot_curves = bone['rotation']
+        rot_has_frames = not(len(rot_curves[0].keyframe_points) == 1 and rot_curves[0].keyframe_points[0].co.x == 1.0)
+        matrix_channels['rotation_frames'] = rot_has_frames
+    if 'scale' in bone:
+        scl_curves = bone['scale']
+        scl_has_frames = not(len(scl_curves[0].keyframe_points) == 1 and scl_curves[0].keyframe_points[0].co.x == 1.0)
+        matrix_channels['scale_frames'] = scl_has_frames
+
+    # Create actual matrix per frame
+    for i in range(keyframes):
+        pos = mathutils.Vector((0.0, 0.0, 0.0))
+        rot = mathutils.Quaternion()
+        scl = mathutils.Vector((1.0, 1.0, 1.0))
+        if pos_curves is not None:
+            if not pos_has_frames:
+                x = pos_curves[0].evaluate(1)
+                y = pos_curves[1].evaluate(1)
+                z = pos_curves[2].evaluate(1)
+            else:
+                x = pos_curves[0].evaluate(i+1)
+                y = pos_curves[1].evaluate(i+1)
+                z = pos_curves[2].evaluate(i+1)
+            pos = mathutils.Vector((x, y, z))
+        if rot_curves is not None:
+            if not rot_has_frames:
+                w = rot_curves[0].evaluate(1)
+                x = rot_curves[1].evaluate(1)
+                y = rot_curves[2].evaluate(1)
+                z = rot_curves[3].evaluate(1)
+            else:
+                w = rot_curves[0].evaluate(i+1)
+                x = rot_curves[1].evaluate(i+1)
+                y = rot_curves[2].evaluate(i+1)
+                z = rot_curves[3].evaluate(i+1)
+            rot = mathutils.Quaternion((w, x, y, z))
+        if scl_curves is not None:
+            if not scl_has_frames:
+                x = scl_curves[0].evaluate(1)
+                y = scl_curves[1].evaluate(1)
+                z = scl_curves[2].evaluate(1)
+            else:
+                x = scl_curves[0].evaluate(i+1)
+                y = scl_curves[1].evaluate(i+1)
+                z = scl_curves[2].evaluate(i+1)
+            scl = mathutils.Vector((x, y, z))
+        '''if i == 0:
+            print("")
+            print(f"{animation['name']} - {bone['pose_bone'].name}")'''
+        # Get bone local base matrix
+        bone_local_matrix = bone['pose_bone'].bone.matrix_local
+        if bone['pose_bone'].parent is not None:
+            bone_local_matrix = bone['pose_bone'].parent.bone.matrix_local.inverted() @ bone_local_matrix
+        # offset from pose
+        offset_matrix = mathutils.Matrix.LocRotScale(pos, rot, scl)
+        '''if i == 0:
+            print('local')
+            print(bone_local_matrix)
+            if bone['pose_bone'].parent is not None:
+                print('import reverse')
+                print(bone['pose_bone'].parent.matrix.inverted() @ bone['pose_bone'].matrix)
+                print((bone['pose_bone'].parent.matrix.inverted() @ bone['pose_bone'].matrix) @ offset_matrix)
+            print('offset')
+            print(offset_matrix)'''
+        # pose + offset
+        final_matrix = bone_local_matrix @ offset_matrix
+        '''if i == 0:
+            print('desired')
+            x, y, z = final_matrix.decompose()
+            print(y.to_euler('XYZ'))
+            print(y)
+            #TODO offset does not match final. SAD (is the math below fine? maybe hardcode actual result and pos?)
+            x = mathutils.Matrix.Rotation(-0.38031371129, 4, 'X')
+            y = mathutils.Matrix.Rotation(0.00757224583, 4, 'Y')
+            z = mathutils.Matrix.Rotation(-0.06963723316, 4, 'Z')
+            rot_mat = z @ y @ x
+            pos_mat = mathutils.Matrix.Translation(Vector((0.0, -1.292695, 0.0)))
+            test_mat = pos_mat @ rot_mat
+            q,w,e = test_mat.decompose()
+            print(w)
+            print(test_mat)'''
+        return_obj = {}
+        p,r,s = final_matrix.decompose()
+        if 'position' in bone:
+            matrix_channels['position'].append(p)
+        if 'rotation' in bone:
+            matrix_channels['rotation'].append(r.to_euler('XYZ'))
+        if 'scale' in bone:
+            matrix_channels['scale'].append(s)
+    return matrix_channels
+
+
+# Generate channel data from array of vectors
+def vector_to_channel(vector_array, has_frames):
+    channel = {}
+    channel['has_frames'] = has_frames
+    if not has_frames:
+        # Handle no keyframes
+        channel['keyframes'] = 1
+        channel['base_x'] = vector_array[0].x
+        channel['base_y'] = vector_array[0].y
+        channel['base_z'] = vector_array[0].z
+        channel['speed_x'] = 0.0
+        channel['speed_y'] = 0.0
+        channel['speed_z'] = 0.0
+        # Empty, cause no keyframes
+        channel['offsets_x'] = []
+        channel['offsets_y'] = []
+        channel['offsets_z'] = []
+    else:
+        length = len(vector_array)
+        channel['keyframes'] = length
+        x_values = []
+        y_values = []
+        z_values = []
+        for i in range(length):
+            x_values.append(vector_array[i].x)
+            y_values.append(vector_array[i].y)
+            z_values.append(vector_array[i].z)
+
+        # Process Keyframes per axis now that they are normalized
+        values = x_values
+        min_val = min(values)
+        max_val = max(values)
+        diff = max_val - min_val
+        channel['base_x'] = min_val
+        channel['speed_x'] = diff / 0xFFFF
+        channel['offsets_x'] = convert_to_ushort(values, min_val, diff)
+
+        values = y_values
+        min_val = min(values)
+        max_val = max(values)
+        diff = max_val - min_val
+        channel['base_y'] = min_val
+        channel['speed_y'] = diff / 0xFFFF
+        channel['offsets_y'] = convert_to_ushort(values, min_val, diff)
+
+        values = z_values
+        min_val = min(values)
+        max_val = max(values)
+        diff = max_val - min_val
+        channel['base_z'] = min_val
+        channel['speed_z'] = diff / 0xFFFF
+        channel['offsets_z'] = convert_to_ushort(values, min_val, diff)
+    return channel
+
+
 # A channel is X Y Z values of postion, rotation or scale
 def get_channels(animations):
     channels = []
@@ -218,24 +317,28 @@ def get_channels(animations):
     # Now cover all animation channels
     for animation in animations:
         for bone in animation['bone_data']:
+            matrix_channel = get_matrix_channel_from_curves(animation, bone)
+            
             if 'position' in bone:
-                channel = get_channel_from_curve(animation, bone['position'])
+                channel = vector_to_channel(matrix_channel['position'], matrix_channel['position_frames'])
                 bone['channel_index_pos'] = check_duplicate_channel(channels, channel)
                 if bone['channel_index_pos'] == -1:
                     bone['channel_index_pos'] = len(channels)
                     channels.append(channel)
             else:
                 bone['channel_index_pos'] = -1
+
             if 'rotation' in bone:
-                channel = get_channel_from_curve(animation, bone['rotation'])
+                channel = vector_to_channel(matrix_channel['rotation'], matrix_channel['rotation_frames'])
                 bone['channel_index_rot'] = check_duplicate_channel(channels, channel)
                 if bone['channel_index_rot'] == -1:
                     bone['channel_index_rot'] = len(channels)
                     channels.append(channel)
             else:
                 bone['channel_index_rot'] = -1
+
             if 'scale' in bone:
-                channel = get_channel_from_curve(animation, bone['scale'])
+                channel = vector_to_channel(matrix_channel['scale'], matrix_channel['scale_frames'])
                 bone['channel_index_scale'] = check_duplicate_channel(channels, channel)
                 if bone['channel_index_scale'] == -1:
                     bone['channel_index_scale'] = len(channels)
@@ -346,7 +449,8 @@ def write_animation_names(file, animations):
 def save(operator, context, filepath="", **kwargs):
     # Gather all the file parts
     bone_names = get_bone_names()
-    animations = get_animations(bone_names)
+    pose_bones = get_pose_bones(bone_names)
+    animations = get_animations(bone_names, pose_bones)
     channels = get_channels(animations)
     with open(filepath, 'wb') as file:
         # Header
