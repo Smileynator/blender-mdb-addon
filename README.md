@@ -49,4 +49,7 @@ File format: https://github.com/KCreator/Earth-Defence-Force-Documentation/wiki/
 
 Discord: https://discord.gg/edf
 
+## License
 EARTH DEFENSE FORCE is the registered trademark of SANDLOT and D3 PUBLISHER INC. This project is not affiliated with or endorsed by SANDLOT or D3 PUBLISHER INC in any way.
+
+This work is licensed under a [Creative Commons Attribution-NonCommercial 4.0 International License](https://creativecommons.org/licenses/by-nc/4.0/) (CC BY-NC 4.0).
