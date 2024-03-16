@@ -1,16 +1,13 @@
 # CANM Exporter for Blender
 # Author: Smileynator
 
-import pprint
 import bpy
 import mathutils
-import numpy as np
 
-from mathutils import Vector
 from struct import pack
 
 
-def get_bone_names():
+def get_bone_names(missing_bones):
     bone_names = set()
     # Iterate over all NLA tracks to get the bones inside
     for track in bpy.context.object.animation_data.nla_tracks:
@@ -20,19 +17,21 @@ def get_bone_names():
                     if "pose.bones" in fcurve.data_path:
                         bone_name = fcurve.data_path.split('"')[1]
                         bone_names.add(bone_name)
-    return list(sorted(bone_names))
+    add_scene_root = False
+    if missing_bones:
+        for bone_name in missing_bones:
+            if bone_name == 'Scene_Root':
+                add_scene_root = True
+                continue
+            bone_names.add(bone_name)
+    bone_names = list(sorted(bone_names))
+    if add_scene_root:
+        bone_names.insert(0, 'Scene_Root')
+    return bone_names
 
 
-def get_pose_bones(bone_names):
+def get_pose_bones(bone_names, armature_object):
     bones = []
-    armature = bpy.data.armatures[0]
-    if not armature:
-        return
-    armature_object = None
-    for obj in bpy.data.objects:
-        if obj.type == 'ARMATURE' and obj.data == armature:
-            armature_object = obj
-            break
     for bone_name in bone_names:
         bones.append(armature_object.pose.bones.get(bone_name))
     return bones
@@ -67,9 +66,12 @@ def get_bone_data(action, bone_names, pose_bones):
         scale_z = action.fcurves.find(data_path_scale, index=2)
         if scale_x and scale_y and scale_z:
             bone['scale'] = [scale_x, scale_y, scale_z]
-        # Only append a bone if curves were found
-        if any(key in bone for key in ('position', 'rotation', 'scale')):
-            bones.append(bone)
+        if not any(key in bone for key in ('position', 'rotation', 'scale')):
+            bone['is_empty'] = True
+        else:
+            bone['is_empty'] = False
+        # Append bone
+        bones.append(bone)
     return bones
 
 
@@ -104,40 +106,24 @@ def convert_to_ushort(array, min, diff):
     return [int(((val - min) * 0xFFFF)/diff) for val in array]
 
 
-dupes = 0
-ezdupes = 0
-harddupes = 0
-
-
-def are_close(value1, value2, tolerance=1e-6):
-    return abs(value1 - value2) < tolerance
-
-
 def check_duplicate_channel(channels, channel):
-    global dupes
-    global ezdupes
-    global harddupes
     if channel['has_frames'] == False:
         for i in range(len(channels)):
-            if are_close(channel['base_x'],channels[i]['base_x']) and \
-                are_close(channel['base_y'], channels[i]['base_y']) and \
-                are_close(channel['base_z'], channels[i]['base_z']):
-                dupes += 1
-                ezdupes += 1
+            if channel['base_x'] == channels[i]['base_x'] and \
+                channel['base_y'] == channels[i]['base_y'] and \
+                channel['base_z'] == channels[i]['base_z']:
                 return i
     else:
         for i in range(len(channels)):
-            if are_close(channel['base_x'],channels[i]['base_x']) and \
-                are_close(channel['base_y'], channels[i]['base_y']) and \
-                are_close(channel['base_z'], channels[i]['base_z']) and \
-                are_close(channel['speed_x'], channels[i]['speed_x']) and \
-                are_close(channel['speed_y'], channels[i]['speed_y']) and \
-                are_close(channel['speed_z'], channels[i]['speed_z']) and \
+            if channel['base_x'] == channels[i]['base_x'] and \
+                channel['base_y'] == channels[i]['base_y'] and \
+                channel['base_z'] == channels[i]['base_z'] and \
+                channel['speed_x'] == channels[i]['speed_x'] and \
+                channel['speed_y'] == channels[i]['speed_y'] and \
+                channel['speed_z'] == channels[i]['speed_z'] and \
                 channel['offsets_x'] == channels[i]['offsets_x'] and \
                 channel['offsets_y'] == channels[i]['offsets_y'] and \
                 channel['offsets_z'] == channels[i]['offsets_z']:
-                dupes += 1
-                harddupes += 1
                 return i
     return -1
 
@@ -206,50 +192,39 @@ def get_matrix_channel_from_curves(animation, bone):
                 y = scl_curves[1].evaluate(i+1)
                 z = scl_curves[2].evaluate(i+1)
             scl = mathutils.Vector((x, y, z))
-        '''if i == 0:
-            print("")
-            print(f"{animation['name']} - {bone['pose_bone'].name}")'''
         # Get bone local base matrix
-        bone_local_matrix = bone['pose_bone'].bone.matrix_local
-        if bone['pose_bone'].parent is not None:
-            bone_local_matrix = bone['pose_bone'].parent.bone.matrix_local.inverted() @ bone_local_matrix
-        # offset from pose
-        offset_matrix = mathutils.Matrix.LocRotScale(pos, rot, scl)
-        '''if i == 0:
-            print('local')
-            print(bone_local_matrix)
+        if bone['pose_bone'] is not None:
+            bone_local_matrix = bone['pose_bone'].bone.matrix_local
             if bone['pose_bone'].parent is not None:
-                print('import reverse')
-                print(bone['pose_bone'].parent.matrix.inverted() @ bone['pose_bone'].matrix)
-                print((bone['pose_bone'].parent.matrix.inverted() @ bone['pose_bone'].matrix) @ offset_matrix)
-            print('offset')
-            print(offset_matrix)'''
-        # pose + offset
-        final_matrix = bone_local_matrix @ offset_matrix
-        '''if i == 0:
-            print('desired')
-            x, y, z = final_matrix.decompose()
-            print(y.to_euler('XYZ'))
-            print(y)
-            #TODO offset does not match final. SAD (is the math below fine? maybe hardcode actual result and pos?)
-            x = mathutils.Matrix.Rotation(-0.38031371129, 4, 'X')
-            y = mathutils.Matrix.Rotation(0.00757224583, 4, 'Y')
-            z = mathutils.Matrix.Rotation(-0.06963723316, 4, 'Z')
-            rot_mat = z @ y @ x
-            pos_mat = mathutils.Matrix.Translation(Vector((0.0, -1.292695, 0.0)))
-            test_mat = pos_mat @ rot_mat
-            q,w,e = test_mat.decompose()
-            print(w)
-            print(test_mat)'''
-        return_obj = {}
-        p,r,s = final_matrix.decompose()
-        if 'position' in bone:
-            matrix_channels['position'].append(p)
-        if 'rotation' in bone:
-            matrix_channels['rotation'].append(r.to_euler('XYZ'))
-        if 'scale' in bone:
-            matrix_channels['scale'].append(s)
+                bone_local_matrix = bone['pose_bone'].parent.bone.matrix_local.inverted() @ bone_local_matrix
+            # offset from pose
+            offset_matrix = mathutils.Matrix.LocRotScale(pos, rot, scl)
+            # pose + offset
+            final_matrix = bone_local_matrix @ offset_matrix
+            p,r,s = final_matrix.decompose()
+            # Append final X Y Z values for pos/rot/scl
+            if 'position' in bone:
+                matrix_channels['position'].append(p)
+            if 'rotation' in bone:
+                matrix_channels['rotation'].append(r.to_euler('XYZ'))
+            if 'scale' in bone:
+                matrix_channels['scale'].append(s)
+        else:
+            # Just an empty matrix for the fake bone
+            # TODO: If fake bones do have animations, this needs to be fixed here as well
+            matrix_channels['position'].append(pos)
+            matrix_channels['rotation'].append(rot.to_euler('XYZ'))
+            matrix_channels['position_frames'] = False
+            matrix_channels['rotation_frames'] = False
+            # No scale required for these
     return matrix_channels
+
+
+def round_precision(value):
+    new_value = round(value / 2e-06) * 2e-06
+    if new_value == -0.0:
+        new_value = 0.0
+    return new_value
 
 
 # Generate channel data from array of vectors
@@ -259,16 +234,9 @@ def vector_to_channel(vector_array, has_frames):
     if not has_frames:
         # Handle no keyframes
         channel['keyframes'] = 1
-        channel['base_x'] = vector_array[0].x
-        channel['base_y'] = vector_array[0].y
-        channel['base_z'] = vector_array[0].z
-        # yeet all really small values out
-        if are_close(0, channel['base_x']):
-            channel['base_x'] = 0.0
-        if are_close(0, channel['base_y']):
-            channel['base_y'] = 0.0
-        if are_close(0, channel['base_z']):
-            channel['base_z'] = 0.0
+        channel['base_x'] = round_precision(vector_array[0].x)
+        channel['base_y'] = round_precision(vector_array[0].y)
+        channel['base_z'] = round_precision(vector_array[0].z)
         channel['speed_x'] = 0.0
         channel['speed_y'] = 0.0
         channel['speed_z'] = 0.0
@@ -283,9 +251,9 @@ def vector_to_channel(vector_array, has_frames):
         y_values = []
         z_values = []
         for i in range(length):
-            x_values.append(vector_array[i].x)
-            y_values.append(vector_array[i].y)
-            z_values.append(vector_array[i].z)
+            x_values.append(round_precision(vector_array[i].x))
+            y_values.append(round_precision(vector_array[i].y))
+            z_values.append(round_precision(vector_array[i].z))
 
         # Process Keyframes per axis now that they are normalized
         values = x_values
@@ -325,8 +293,8 @@ def get_channels(animations):
     for animation in animations:
         for bone in animation['bone_data']:
             matrix_channel = get_matrix_channel_from_curves(animation, bone)
-            
-            if 'position' in bone:
+
+            if 'position' in bone or bone['is_empty']:
                 channel = vector_to_channel(matrix_channel['position'], matrix_channel['position_frames'])
                 bone['channel_index_pos'] = check_duplicate_channel(channels, channel)
                 if bone['channel_index_pos'] == -1:
@@ -335,7 +303,7 @@ def get_channels(animations):
             else:
                 bone['channel_index_pos'] = -1
 
-            if 'rotation' in bone:
+            if 'rotation' in bone or bone['is_empty']:
                 channel = vector_to_channel(matrix_channel['rotation'], matrix_channel['rotation_frames'])
                 bone['channel_index_rot'] = check_duplicate_channel(channels, channel)
                 if bone['channel_index_rot'] == -1:
@@ -352,7 +320,6 @@ def get_channels(animations):
                     channels.append(channel)
             else:
                 bone['channel_index_scale'] = -1
-        print(f'Chans: {len(channels)} Dupes: {dupes} EZ: {ezdupes} HARD: {harddupes}')
     return channels
 
 
@@ -371,7 +338,7 @@ def write_header(file, bone_names, animations, channels):
 
 
 def write_channels(file, channels):
-    # Write Animatio Channel Data
+    # Write Animation Channel Data
     for chan in channels:
         chan['base_pos'] = file.tell()
         if chan['has_frames'] == True:
@@ -398,6 +365,9 @@ def write_channels(file, channels):
             file.write(pack('H', chan['offsets_x'][i]))
             file.write(pack('H', chan['offsets_y'][i]))
             file.write(pack('H', chan['offsets_z'][i]))
+    # Padding to nearest 4
+    padding_needed = (4 - (file.tell() % 4)) % 4
+    file.write(b'\0' * padding_needed)
 
 # Seeks to the target, writes a file offset relative to the given base, returns to original position
 def rewrite_offset(file, rewrite_target, current_position, target_base_offset):
@@ -431,32 +401,66 @@ def write_animations(file, animations):
             file.write(pack('h', bone['channel_index_scale']))
 
 
-def write_bone_names(file, bone_names):
+def write_all_strings(file, bone_names, animations):
     base_positions = []
+    # Create string table for bones
     for string in bone_names:
         base_positions.append(file.tell())
         file.write(bytes([0x00, 0x00, 0x00, 0x00]))
+    # Create fill list with offsets
+    name_list = []
     for index, string in enumerate(bone_names):
-        # Correct the pointer
-        rewrite_offset(file, base_positions[index], file.tell(), base_positions[index])
-        # Write string
-        file.write(string.encode('UTF-16LE'))
-        file.write(bytes([0x00, 0x00]))  # Terminate string
-
-
-def write_animation_names(file, animations):
+        name_obj = {}
+        name_obj['string'] = string
+        name_obj['base'] = base_positions[index]
+        name_obj['replace'] = base_positions[index]
+        name_list.append(name_obj)
     for anim in animations:
+        name_obj = {}
+        name_obj['string'] = anim['name']
+        name_obj['base'] = anim['base_pos']
+        name_obj['replace'] = anim['name_pos']
+        name_list.append(name_obj)
+
+    # Sort the list
+    sorted_list = sorted(name_list, key=lambda x: x['string'])
+
+    def write_str_obj(file, obj):
         # Replace name_pos with correct value
-        rewrite_offset(file, anim['name_pos'], file.tell(), anim['base_pos'])
+        rewrite_offset(file, obj['replace'], file.tell(), obj['base'])
         # Write string
-        file.write(anim['name'].encode('UTF-16LE'))
+        file.write(obj['string'].encode('UTF-16LE'))
         file.write(bytes([0x00, 0x00]))  # Terminate string
+
+    # Write to file, scene root first
+    for obj in sorted_list:
+        if obj['string'] != 'Scene_Root':
+            continue
+        write_str_obj(file, obj)
+    for obj in sorted_list:
+        if obj['string'] == 'Scene_Root':
+            continue
+        write_str_obj(file, obj)
 
 
 def save(operator, context, filepath="", **kwargs):
+    # Get the armature
+    armature = bpy.data.armatures[0]
+    if not armature:
+        print("Armature not found")
+        return {'CANCELLED'}
+    armature_object = None
+    for obj in bpy.data.objects:
+        if obj.type == 'ARMATURE' and obj.data == armature:
+            armature_object = obj
+            break
+    if armature_object is None:
+        print("Armature Object not found")
+        return {'CANCELLED'}
     # Gather all the file parts
-    bone_names = get_bone_names()
-    pose_bones = get_pose_bones(bone_names)
+    missing_bones = armature_object.get('missing_bones')
+    bone_names = get_bone_names(missing_bones)
+    pose_bones = get_pose_bones(bone_names, armature_object)
     animations = get_animations(bone_names, pose_bones)
     channels = get_channels(animations)
     with open(filepath, 'wb') as file:
@@ -472,8 +476,6 @@ def save(operator, context, filepath="", **kwargs):
         write_animations(file, animations)
         # Write header Bone Name Offset
         rewrite_offset(file, 0x1C, file.tell(), 0x00)
-        # Write All Bone Names
-        write_bone_names(file, bone_names)
-        # Write All Animation Names
-        write_animation_names(file, animations)
+        # Write All strings
+        write_all_strings(file, bone_names, animations)
     return {'FINISHED'}
