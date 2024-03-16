@@ -71,9 +71,8 @@ def parse_anm_data(f, anm_data_count, anm_data_offset):
 
         f.seek(base+name)
         data['name'] = read_wide_str(f)
-        
         data['bone_data'] = parse_bone_data(f, bone_data_count, base+bone_data_offset)
-        
+
         f.seek(next)
         anm_data.append(data)
     return anm_data
@@ -243,14 +242,6 @@ def create_action_with_animation(armature_obj, animation, canm):
     action['duration'] = animation['duration']
     # Get the actual max length of the animation
     keyframes = animation["keyframe_count"]
-    # Warn missing bones
-    for bone_anim in animation['bone_data']:
-        bone_name = canm['bone_names'][bone_anim['bone_id']]
-        pose_bone = armature_obj.pose.bones.get(bone_name)
-        # Skip bones not found TODO figure out how to store these anyway
-        if not pose_bone:
-            print(f'Could not find bone: {bone_name}')
-            continue
     # For each keyframe, generate entire bone structure from the root upward
     for i in range(keyframes):
         # Go over every bone in the armature
@@ -303,7 +294,21 @@ def load(operator, context, filepath='', **kwargs):
             break
 
     # Create animation timelines for each animation
-    for index, animation in enumerate(canm['animations']):
+    for animation in canm['animations']:
         # Create action for animation
         create_action_with_animation(armature_object, animation, canm)
+
+    # Warn missing bones and append to armature object
+    # TODO Currently assumes the missing bones are identical in each animation
+    # TODO will these ever have animations? If so we need to store those too.
+    missing_bones = []
+    for bone_anim in canm['animations'][0]['bone_data']:
+        bone_name = canm['bone_names'][bone_anim['bone_id']]
+        pose_bone = armature_object.pose.bones.get(bone_name)
+        # Skip bones not found
+        if not pose_bone:
+            print(f'Could not find bone: {bone_name}. Instead stored in Armature Object.')
+            missing_bones.append(bone_name)
+    armature_object['missing_bones'] = missing_bones
+    
     return {'FINISHED'}
