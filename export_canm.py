@@ -87,12 +87,7 @@ def get_animations(bone_names, pose_bones):
         anim['name'] = action.name
         anim['duration'] = action['duration']
         anim['loop'] = action['loop']
-        # Get the max keyframe in action as integer
-        max_keyframe = 0
-        for fcurve in action.fcurves:
-            kf = fcurve.keyframe_points[-1]
-            max_keyframe = max(max_keyframe, kf.co[0])
-        anim['keyframes'] = round(max_keyframe)
+        anim['keyframes'] = action['keyframes']
         anim['between_keyframes'] = anim['duration'] / (anim['keyframes'] - 1)
         anim['bone_data'] = get_bone_data(action, bone_names, pose_bones)
         animations.append(anim)

@@ -63,7 +63,7 @@ def parse_anm_data(f, anm_data_count, anm_data_offset):
         name = read_int(f)
         data['duration'] = read_float(f)
         data['frame_duration'] = read_float(f)
-        data['keyframe_count'] = read_uint(f)
+        data['keyframes'] = read_uint(f)
         bone_data_count = read_uint(f)
         bone_data_offset = read_uint(f)
         next = f.tell()
@@ -240,6 +240,7 @@ def create_action_with_animation(armature_obj, animation, canm):
     # Set custom properties up
     action['loop'] = animation['loop']
     action['duration'] = animation['duration']
+    action['keyframes'] = animation['keyframes']
     # Get the actual max length of the animation
     keyframes = animation["keyframe_count"]
     # For each keyframe, generate entire bone structure from the root upward
