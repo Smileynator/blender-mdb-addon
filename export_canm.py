@@ -156,6 +156,7 @@ def get_matrix_channel_from_curves(animation, bone):
         matrix_channels['scale_frames'] = scl_has_frames
 
     # Create actual matrix per frame
+    last_euler = None
     for i in range(keyframes):
         pos = mathutils.Vector((0.0, 0.0, 0.0))
         rot = mathutils.Quaternion()
@@ -206,7 +207,11 @@ def get_matrix_channel_from_curves(animation, bone):
             if 'position' in bone:
                 matrix_channels['position'].append(p)
             if 'rotation' in bone:
-                matrix_channels['rotation'].append(r.to_euler('XYZ'))
+                if last_euler:
+                    last_euler = r.to_euler('XYZ', last_euler)
+                else:
+                    last_euler = r.to_euler('XYZ')
+                matrix_channels['rotation'].append(last_euler)
             if 'scale' in bone:
                 matrix_channels['scale'].append(s)
         else:
@@ -221,10 +226,7 @@ def get_matrix_channel_from_curves(animation, bone):
 
 
 def round_precision(value):
-    new_value = round(value / 2e-06) * 2e-06
-    if new_value == -0.0:
-        new_value = 0.0
-    return new_value
+    return round(value / 2e-06) * 2e-06
 
 
 # Generate channel data from array of vectors
