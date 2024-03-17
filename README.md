@@ -60,6 +60,9 @@ Animations have Scale support in theory, but the game rarely uses it, so it is l
 
 Animations during export are optimized to minimize filesize and prevent channel overflow. To not run into the channel limitation, any bone that does not need pos/rot/scale, should delete those curves entirely. If you only need a starting value, stick to 1 keyframe at frame 1. This allows them to be optimized further. Values are rounded to the closest 2e-06, though this should not be practically visible to anyone.
 
+The export will sample an Fcurve per increment of 1, until it reached the amount of keyframes the animation is supposed to have.
+Importing creates 1 keyframe per frame. however this is not required for export, so you can safely delete a few frames to make animation easier.
+
 Keep in mind that animations are being interpolated between by the game's CAS file. This means that unless CAS files are properly edited, removing entire animations or adding completely new animations instead of replacing existing ones, will likely cause problems.
 
 If after modding the new CAS into the game, the character T-poses, something went wrong and needs to be looked into.
