@@ -242,7 +242,7 @@ def create_action_with_animation(armature_obj, animation, canm):
     action['duration'] = animation['duration']
     action['keyframes'] = animation['keyframes']
     # Get the actual max length of the animation
-    keyframes = animation["keyframe_count"]
+    keyframes = animation["keyframes"]
     # For each keyframe, generate entire bone structure from the root upward
     for i in range(keyframes):
         # Go over every bone in the armature
