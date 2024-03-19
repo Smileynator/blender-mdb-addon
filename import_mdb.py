@@ -533,16 +533,25 @@ def load(operator, context, filepath='', **kwargs):
             if filename in textures:
                 texImage.image = textures[filename]
             else:
+                #Try and load texture from HD or SD folder
+                image = None
                 try:
                     image = bpy.data.images.load(os.path.join(os.path.dirname(filepath), '..', 'HD-TEXTURE', filename))
+                except RuntimeError as e: # Ignore texture import error
+                    print("Failed to find HD texture. Trying SD texture.")
+                if image is None:
+                    try:
+                        image = bpy.data.images.load(os.path.join(os.path.dirname(filepath), '..', 'TEXTURE', filename))
+                    except RuntimeError as e: # Ignore texture import error
+                        print("Failed to find SD texture.")
+                        print(e)
+                if image is not None:
                     texImage.image = image
                     textures[filename] = image
                     # Why is Straight being treated as Premultiplied by cycles?
                     image.alpha_mode = 'CHANNEL_PACKED'
                     if 'albedo' not in txr_map and 'diffuse' not in txr_map:
                         image.colorspace_settings.name = 'Non-Color'
-                except RuntimeError as e: # Ignore texture import error
-                    print(e)
 
             texImage.location[0] = shader_node.location[0] - 700 + unhandled * 40
             texImage.location[1] = shader_node.location[1] - unhandled * 40
