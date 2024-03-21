@@ -247,11 +247,19 @@ def create_action_with_animation(armature_obj, animation, canm):
     for i in range(keyframes):
         # Go over every bone in the armature
         for pose_bone in armature_obj.pose.bones:
+            # Get the bone ID
             try:
                 bone_index = canm['bone_names'].index(pose_bone.name)
             except ValueError:
+                continue  # Skip the bone, unknown bone name
+            # Get the correct bone data if any
+            bone_anim = None
+            for bone_data in animation['bone_data']:
+                if bone_data['bone_id'] == bone_index:
+                    bone_anim = bone_data
+                    break
+            if bone_anim is None:
                 continue  # Skip the bone, no animations
-            bone_anim = animation['bone_data'][bone_index]
             # Get Bone Matrix
             matrix_result = get_bone_matrix_of_frame(canm, bone_anim, i)
             # Final local offset matrix

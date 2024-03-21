@@ -17,16 +17,10 @@ def get_bone_names(missing_bones):
                     if "pose.bones" in fcurve.data_path:
                         bone_name = fcurve.data_path.split('"')[1]
                         bone_names.add(bone_name)
-    add_scene_root = False
     if missing_bones:
         for bone_name in missing_bones:
-            if bone_name == 'Scene_Root':
-                add_scene_root = True
-                continue
             bone_names.add(bone_name)
     bone_names = list(sorted(bone_names))
-    if add_scene_root:
-        bone_names.insert(0, 'Scene_Root')
     return bone_names
 
 
@@ -290,8 +284,9 @@ def get_channels(animations):
     for animation in animations:
         for bone in animation['bone_data']:
             matrix_channel = get_matrix_channel_from_curves(animation, bone)
-
-            if 'position' in bone or bone['is_empty']:
+            # Is we have position, or is_empty, we add the channel.
+            # If is_empty AND we have pose bone, we need to ignore the bone, because they omitted data on purpose.
+            if 'position' in bone or (bone['is_empty'] and bone['pose_bone'] is None):
                 channel = vector_to_channel(matrix_channel['position'], matrix_channel['position_frames'])
                 bone['channel_index_pos'] = check_duplicate_channel(channels, channel)
                 if bone['channel_index_pos'] == -1:
@@ -300,7 +295,7 @@ def get_channels(animations):
             else:
                 bone['channel_index_pos'] = -1
 
-            if 'rotation' in bone or bone['is_empty']:
+            if 'rotation' in bone or (bone['is_empty'] and bone['pose_bone'] is None):
                 channel = vector_to_channel(matrix_channel['rotation'], matrix_channel['rotation_frames'])
                 bone['channel_index_rot'] = check_duplicate_channel(channels, channel)
                 if bone['channel_index_rot'] == -1:
