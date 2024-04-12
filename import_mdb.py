@@ -662,7 +662,8 @@ def load(operator, context, filepath='', **kwargs):
                     z = normal[2]
                     normals.append((x, -z, y))
                 mesh.normals_split_custom_set_from_vertices(normals)
-                mesh.use_auto_smooth = True # Enable custom normals
+                if bpy.app.version < (4, 1, 0):
+                    mesh.use_auto_smooth = True  # Enable custom normals
 
             # Add UV maps
             for i in range(4):
