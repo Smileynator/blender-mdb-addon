@@ -3,7 +3,6 @@
 
 import bpy
 import mathutils
-import numpy as np
 
 from mathutils import Vector
 from struct import unpack
@@ -84,9 +83,9 @@ def parse_keyframes(f, keyframe_count, keyframe_offset):
     for i in range(keyframe_count):
         data = {}
         base = f.tell()
-        data['x'] = np.float(read_ushort(f))
-        data['y'] = np.float(read_ushort(f))
-        data['z'] = np.float(read_ushort(f))
+        data['x'] = float(read_ushort(f))
+        data['y'] = float(read_ushort(f))
+        data['z'] = float(read_ushort(f))
         next = f.tell()
         assert next - base == 0x06
         keyframes.append(data)
