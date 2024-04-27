@@ -1,6 +1,8 @@
 # Blender MDB & CANM Addon
 Blender model/animation importer/exporter for Earth Defense Force 5's .mdb and .canm files.  
-Supported version of blender is 3.6, older and newer versions not guaranteed, but might be supported later if demand is high and support isn't hard to create.
+Blender version supported: 3.6
+No guarantees on other versions, but also tested and working on 4.0 and 4.1.1
+If you post your issues in other versions or any other problems you run into, i will see what i can do, reach out to me on the EDF discord.
 
 ## Download
 https://github.com/Smileynator/blender-mdb-addon/archive/refs/heads/master.zip
