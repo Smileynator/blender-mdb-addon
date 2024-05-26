@@ -489,16 +489,21 @@ def load(operator, context, filepath='', **kwargs):
         material.use_nodes = True
         mat_nodes = material.node_tree
         # Remove default node if it exists
-        if 'Principled BSDF' in mat_nodes.nodes:
-            bsdf = mat_nodes.nodes['Principled BSDF']
-            mat_nodes.nodes.remove(bsdf)
+        for node in mat_nodes.nodes:
+            if node.type == 'BSDF_PRINCIPLED':
+                mat_nodes.nodes.remove(node)
+                break
         unhandled = 0
 
         shader = get_shader(mdb_material['shader'])
         if shader.has_alpha and material.blend_method == 'OPAQUE':
             material.blend_method = 'HASHED'
 
-        mat_out = mat_nodes.nodes['Material Output']
+        mat_out = None
+        for node in mat_nodes.nodes:
+            if node.type == 'OUTPUT_MATERIAL':
+                mat_out = node
+                break
         shader_node = material.node_tree.nodes.new('ShaderNodeGroup')
         shader_node.node_tree = shader.shader_tree
         shader_node.show_options = False
