@@ -1,8 +1,8 @@
 bl_info = {
     "name": "Earth Defense Force Formats",
     "author": "Smileynator / BlueAmulet",
-    "version": (1, 6, 3),
-    "blender": (2, 90, 0),
+    "version": (1, 6, 4),
+    "blender": (3, 6, 0),
     "location": "File > Import-Export",
     "description": "Import-Export MDB, CANM, mesh, UV's, materials, textures, Animations from Earth Defense Force",
     "warning": "",

@@ -488,8 +488,10 @@ def load(operator, context, filepath='', **kwargs):
             material.blend_method = 'CLIP'
         material.use_nodes = True
         mat_nodes = material.node_tree
-        bsdf = mat_nodes.nodes['Principled BSDF']
-        mat_nodes.nodes.remove(bsdf)
+        # Remove default node if it exists
+        if 'Principled BSDF' in mat_nodes.nodes:
+            bsdf = mat_nodes.nodes['Principled BSDF']
+            mat_nodes.nodes.remove(bsdf)
         unhandled = 0
 
         shader = get_shader(mdb_material['shader'])
