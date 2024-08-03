@@ -1,5 +1,5 @@
 # Blender MDB & CANM Addon
-Blender model/animation importer/exporter for Earth Defense Force 5's .mdb and .canm files.  
+Blender model/animation importer/exporter for Earth Defense Force 5 and 6 .mdb and .canm files. 
 Blender version supported: 3.6
 No guarantees on other versions, but also tested and working on 4.0 and 4.1.1
 If you post your issues in other versions or any other problems you run into, i will see what i can do, reach out to me on the EDF discord.
@@ -13,8 +13,8 @@ Very little error catching has been implemented, so expect some problems.
 ## Features
 - Importing of any .mdb Model
 - Exporting of any .mdb Model
-- Importing of any .canm Animations on top of a model
-- Exporting of any .canm Animations from a model
+- Importing of any .canm Animations on top of a model (EDF5 only)
+- Exporting of any .canm Animations from a model (EDF5 only)
 - Bone support
 - Material variable support (Not material editing!)
 - Mesh editing support
