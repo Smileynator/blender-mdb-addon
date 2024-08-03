@@ -41,6 +41,9 @@ class Shader:
         if shader in shader_data:
             params = {}
 
+# TODO so this shader thing looks up the default values to use in shader_data, 
+# while in reality we HAVE this data from the imported MDB, and we should probably try to just generate it from there instead?
+
             # Map out multi purpose textures
             for param in shader_data[shader]:
                 pname, ptype = param[:2]
@@ -214,7 +217,8 @@ class Shader:
                 shader_tree.links.new(bsdf.inputs[specular_input], self.get_or_split('reflect'))
             # TODO: How to handle specular?
         else:
-            print('Warning: MDB uses unknown shader ' + shader)
+            raise Exception('MDB uses unknown shader ' + shader + 
+                            ' processing halted because resulting import would fail to export.')
 
         # Deselect all nodes
         for node in shader_tree.nodes:
