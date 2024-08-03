@@ -11,8 +11,8 @@ Please leave any problems as an Issue with logs and screenshots if possible.
 Very little error catching has been implemented, so expect some problems.
 
 ## Features
-- Importing of any .mdb Model
-- Exporting of any .mdb Model
+- Importing of any .mdb Model (EDF6 might have shader issues!)
+- Exporting of any .mdb Model (EDF6 might have shader issues!)
 - Importing of any .canm Animations on top of a model (EDF5 only)
 - Exporting of any .canm Animations from a model (EDF5 only)
 - Bone support
