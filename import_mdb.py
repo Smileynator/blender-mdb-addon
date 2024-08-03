@@ -5,9 +5,10 @@ import bpy
 import mathutils
 import numpy as np
 
-from struct import pack, unpack
-from .shader import new_socket, Shader, get_shader
+from struct import unpack
+from .shader import new_socket, get_shader
 
+is_edf6 = False
 # Original model is Y UP, but blender is Z UP by default, we convert that here.
 bone_up_Y = mathutils.Matrix(((1.0, 0.0, 0.0, 0.0),
                             (0.0, 0.0, -1.0, 0.0),
@@ -176,15 +177,15 @@ def parse_mat_txr(f, count, offset):
         mat_txr = {}
         base = f.tell()
         mat_txr['texture'] = read_uint(f)
-        string = read_uint(f)
-        mat_txr['unk0'] = read_ushort(f)
-        mat_txr['unk1'] = read_ushort(f)
-        f.read(12) # Always zero
-        mat_txr['unk2'] = read_uint(f)
+        type_name_offset = read_uint(f)
+        mat_txr['unk0'] = read_uint(f)  # 0, but 4 for hornet in EDF5?
+        f.read(12)  # Always zero, 3 values
+        mat_txr['unk1'] = read_int(f)  # 0, but -1 for hornet in EDF5?
+
         next = f.tell()
         assert next - base == 28
 
-        f.seek(base+string)
+        f.seek(base+type_name_offset)
         mat_txr['map'] = read_str(f)
 
         f.seek(next)
@@ -280,7 +281,7 @@ def parse_vertices(f, count, offset, layout, vertex_size):
                     f.seek(layout[j+1]['offset'] - elem['offset'])
                 else:
                     f.seek(vertex_size - elem['offset'])
-            vertex[elem['name'] + str(elem['channel'])] = array
+            vertex[elem['name'].lower() + str(elem['channel'])] = array
         vertices.append(vertex)
     return vertices
 
@@ -342,7 +343,7 @@ def parse_mdb(f):
     mdb = {}
     f.seek(0)
     magic = f.read(4)
-    version = read_uint(f)
+    file_version = read_uint(f)
     name_count = read_uint(f)
     name_offset = read_uint(f)
     bone_count = read_uint(f)
@@ -355,7 +356,10 @@ def parse_mdb(f):
     texture_offset = read_uint(f)
 
     assert magic == b'MDB0'
-    assert version == 0x14
+    assert file_version == 0x14 or file_version == 0x20
+    if file_version == 0x20:
+        global is_edf6
+        is_edf6 = True
 
     mdb['names'] = parse_names(f, name_count, name_offset)
     mdb['bones'] = parse_bones(f, bone_count, bone_offset, mdb['names'])
@@ -663,14 +667,21 @@ def load(operator, context, filepath='', **kwargs):
                 normals = []
                 for vert in vertices:
                     normal = vert['normal0'].astype(float)
-                    normal /= np.sqrt(normal[0]*normal[0]+normal[1]*normal[1]+normal[2]*normal[2])
-                    x = normal[0]
-                    y = normal[1]
-                    z = normal[2]
-                    normals.append((x, -z, y))
+                    magnitude = np.sqrt(normal[0]*normal[0] + normal[1]*normal[1] + normal[2]*normal[2])
+                    if magnitude > 0:
+                        normal /= magnitude
+                        x = normal[0]
+                        y = normal[1]
+                        z = normal[2]
+                        normals.append((x, -z, y))
+                    else:
+                        # print('Warning: A normal was undefined, blame Sandlot')
+                        normals.append((0.0, 0.0, 0.0))
                 mesh.normals_split_custom_set_from_vertices(normals)
                 if bpy.app.version < (4, 1, 0):
                     mesh.use_auto_smooth = True  # Enable custom normals
+            else:
+                print("No normals found for mesh " + name)
 
             # Add UV maps
             for i in range(4):
@@ -684,14 +695,16 @@ def load(operator, context, filepath='', **kwargs):
                             uvmap.data[loop_idx].uv[1] = 1.0 - texcoord[1]
 
             # Add vertex groups
-            if 'BLENDWEIGHT0' in vertices[0]:
+            if 'blendweight0' in vertices[0]:
                 groups = []
                 for n in range(len(mdb['bones'])):
                     groups.append(mesh_obj.vertex_groups.new(name=mdb['bones'][n]['name']))
                 for i, vert in enumerate(vertices):
                     for n in range(4):
-                        if vert['BLENDWEIGHT0'][n] != 0:
-                            groups[vert['BLENDINDICES0'][n]].add([i], vert['BLENDWEIGHT0'][n], 'ADD')
+                        if vert['blendweight0'][n] != 0:
+                            groups[vert['blendindices0'][n]].add([i], vert['blendweight0'][n], 'ADD')
+            else:
+                print("No blend weights found for mesh " + name)
 
             mod = mesh_obj.modifiers.new("Armature", 'ARMATURE')
             mod.object = armature_obj

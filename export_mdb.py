@@ -8,15 +8,16 @@ import numpy as np
 
 from .shader_data import shaders as shader_data
 
+gameVersion = 0
 # Original model is Y UP, but blender is Z UP by default, we convert that here.
 bone_up_Y = mathutils.Matrix(((1.0, 0.0, 0.0, 0.0),
                               (0.0, 0.0, -1.0, 0.0),
                               (0.0, 1.0, 0.0, 0.0),
                               (0.0, 0.0, 0.0, 1.0)))
 
-def write_header(file, names, bones, objects, materials, textures):
+def write_header(file, version, names, bones, objects, materials, textures):
     file.write(b'MDB0')
-    file.write(struct.pack('I', 0x14))  # Version
+    file.write(struct.pack('I', version))  # Version
     
     # Name Table Size and offset
     name_length = len(names)
@@ -179,6 +180,8 @@ def write_texture_data(file, textures, utf16_strings):
 
 
 def get_materials(indexed_strings, textures):
+    # TODO some materials still leak into the export that are not used by the original model
+    # TODO Some models without blendweights still get exported blend data
     materials = []
     valid_materials = []
     # Filter any material that are not recognized by shader_data
@@ -214,7 +217,7 @@ def get_materials(indexed_strings, textures):
                     material_data['shader_name'] = node.node_tree.name
                     for input in node.inputs:
                         # Skip all "extra" inputs
-                        if input.name.endswith('_y') or input.name.endswith('_alpha'):
+                        if (not input.is_linked) or input.name.endswith('_y') or input.name.endswith('_alpha'):
                             continue
                         if is_texture_node(node.node_tree.name, input.name):
                             texture_data.append(get_texture(input, textures))
@@ -251,15 +254,15 @@ def get_parameter(all_inputs, input):
         parameter_data = {
             'name': input.name.rstrip('_x'),
             'values': [input.default_value, y_input.default_value],
-            'type': 1, #Vector2 type
+            'type': 1,  #Vector2 type
             'size': 2
         }
     elif input.type == 'RGBA':
-        type = 2 #RGB type
+        type = 2  #RGB type
         values = [input.default_value[0], input.default_value[1], input.default_value[2]]
         alpha_input = all_inputs.get(input.name+'_alpha', None)
         if alpha_input is not None:
-            type = 3 #RGBA type
+            type = 3  #RGBA type
             values.append(input.default_value[3])
         parameter_data = {
             'name': input.name,
@@ -271,7 +274,7 @@ def get_parameter(all_inputs, input):
         parameter_data = {
             'name': input.name,
             'values': [input.default_value],
-            'type': 0, # Float type
+            'type': 0,  # Float type
             'size': 1
         }
     else:
@@ -506,6 +509,12 @@ def get_vertices_data(mesh, is_skinned):
         }
         uv_data.append(texcoord_data)
         vertices_data.append(texcoord_data)
+
+    # Capitalize all the names in EDF6, as they seem to expect that
+    if gameVersion == 6:
+        for data in uv_data:
+            data['name'] = data['name'].upper()
+    
     # Finally we go over all the vertices and populate the data arrays in each of the above data channels
     uv_count = len(mesh.uv_layers)
     for vert in mesh.vertices:
@@ -682,7 +691,10 @@ def sort_objects_by_name_order(array_to_sort, reference_array):
 
     return sorted_array
 
-def save(operator, context, filepath="", **kwargs):
+def save(operator, context, filepath="", version=0, **kwargs):
+    assert version != 0
+    global gameVersion
+    gameVersion = version
     # Get the name table
     indexed_strings = get_unique_names()
     ascii_strings = []
@@ -695,10 +707,15 @@ def save(operator, context, filepath="", **kwargs):
 
     # Sort all the objects by bone name order
     objects = sort_objects_by_name_order(objects, bones)
-    
+
     with open(filepath, 'wb') as file:
         # Write header
-        write_header(file, indexed_strings, bones, objects, materials, texture_names)
+        hexVersion = 0x00
+        if version == 5:
+            hexVersion = 0x14
+        if version == 6:
+            hexVersion = 0x20
+        write_header(file, hexVersion, indexed_strings, bones, objects, materials, texture_names)
         # Write name pointers placeholder
         file.write(bytes([0x01, 0x02, 0x03, 0x04]) * len(indexed_strings))
         # Write Bone Data

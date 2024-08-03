@@ -38,9 +38,8 @@ class Shader:
         self.multi_tex = multi_tex
         self.has_alpha = False
         self.facing = None
-
         if shader in shader_data:
-            params={}
+            params = {}
 
             # Map out multi purpose textures
             for param in shader_data[shader]:

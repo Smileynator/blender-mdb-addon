@@ -53,10 +53,10 @@ class ImportMDB(bpy.types.Operator, ImportHelper):
         pass
 
 
-class ExportMDB(bpy.types.Operator, ExportHelper):
+class ExportMDB_5(bpy.types.Operator, ExportHelper):
     """Write a MDB file"""
     bl_idname = "export_scene.mdb"
-    bl_label = "Export MDB"
+    bl_label = "Export MDB EDF5"
     bl_options = {'UNDO', 'PRESET'}
 
     filename_ext = ".mdb"
@@ -68,6 +68,34 @@ class ExportMDB(bpy.types.Operator, ExportHelper):
         from . import export_mdb
 
         keywords = self.as_keywords(ignore=())
+        keywords['version'] = 5  # Set the version to 5
+
+        return export_mdb.save(self, context, **keywords)
+
+    def draw(self, context):
+        pass
+
+    @classmethod
+    def poll(cls, context):
+        # Ensure user has left Edit mode, so the meshes we export are up to date.
+        return (context.active_object is not None) and (not context.active_object.mode == 'EDIT')
+
+class ExportMDB_6(bpy.types.Operator, ExportHelper):
+    """Write a MDB file"""
+    bl_idname = "export_scene.mdb"
+    bl_label = "Export MDB EDF6"
+    bl_options = {'UNDO', 'PRESET'}
+
+    filename_ext = ".mdb"
+    filter_glob: StringProperty(default="*.mdb", options={'HIDDEN'})
+
+    check_extension = True
+
+    def execute(self, context):
+        from . import export_mdb
+
+        keywords = self.as_keywords(ignore=())
+        keywords['version'] = 6  # Set the version to 6
 
         return export_mdb.save(self, context, **keywords)
 
@@ -133,13 +161,15 @@ def menu_func_import(self, context):
 
 
 def menu_func_export(self, context):
-    self.layout.operator(ExportMDB.bl_idname, text="Earth Defense Force Model (.mdb)")
+    self.layout.operator(ExportMDB_5.bl_idname, text="Earth Defense Force 5 Model (.mdb)")
+    self.layout.operator(ExportMDB_6.bl_idname, text="Earth Defense Force 6 Model (.mdb)")
     self.layout.operator(ExportCANM.bl_idname, text="Earth Defense Force Animation (.canm)")
 
 
 classes = (
     ImportMDB,
-    ExportMDB,
+    ExportMDB_5,
+    ExportMDB_6,
     ImportCANM,
     ExportCANM,
 )

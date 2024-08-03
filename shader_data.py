@@ -1182,5 +1182,71 @@ shaders = {
 ('damage_dist', 'texture'),
 ('damage_diffuse', 'texture'),
 ('damage_normal', 'normal')
-]
+],
+    # EDF 6
+'snd_BRDF_Common_Basic': [
+    ('diffuse', 'float3', (1.0, 1.0, 1.0)),
+    ('specular_color', 'float3', (1.0, 1.0, 1.0)),
+    ('specular_diffuse_blend', 'float', 0.0),
+    ('normal_amount', 'float', 0.0),
+    ('metallic', 'float', 0.0),
+    ('roughness', 'float', 0.0),
+
+    ('albedo', 'texture'),
+    ('normal', 'normal'),
+    ('param_reflect_specpow_specint_occ', 'texture_alpha')
+],
+'snd_BRDF_Common_Basic_Damage': [
+    ('diffuse', 'float3', (1.0, 1.0, 1.0)),
+    ('specular_color', 'float3', (1.0, 1.0, 1.0)),
+    ('specular_diffuse_blend', 'float', 0.0),
+    ('normal_amount', 'float', 0.0),
+    ('metallic', 'float', 0.0),
+    ('roughness', 'float', 0.0),
+    ('damage_test', 'float', 0.0),
+    ('damage_uv_mul', 'float2', (1.0, 1.0)),
+    ('damage_mask_uv_mul', 'float2', (1.0, 1.0)),
+    ('damage_normal_amount', 'float', 1.0),
+    ('damage_specular_color', 'float3', (1.0, 1.0, 1.0)),
+    ('damage_edge_color', 'float3', (1.0, 1.0, 1.0)),
+    ('damage_max_color', 'float3', (0.2, 0.1, 0.1)),
+    ('damage_metallic', 'float', 0.0),
+    ('damage_roughness', 'float', 0.0),
+
+    ('albedo', 'texture'),
+    ('normal', 'normal'),
+    ('param_reflect_specpow_specint_occ', 'texture_alpha'),
+    ('damage_dist', 'texture'),
+    ('damage_diffuse', 'texture'),
+    ('damage_normal', 'normal')
+],
+'snd_BRDF_Common_Light': [
+    ('diffuse', 'float3', (1.0, 1.0, 1.0)),
+    ('light_color', 'float3', (1.0, 1.0, 1.0)),
+    ('metallic', 'float', 0.0),
+    ('normal_amount', 'float', 0.0),
+    ('roughness', 'float', 0.0),
+    ('specular_color', 'float3', (1.0, 1.0, 1.0)),
+    ('specular_diffuse_blend', 'float', 0.0),
+
+    ('albedo', 'texture'),
+    ('normal', 'normal'),
+    ('param_r_m_occ_light', 'texture_alpha')
+],
+'snd_BRDF_Chara_2ColorChange_Light': [
+    ('change_color0', 'float3', (1.0, 0.0, 0.0)),
+    ('change_color1', 'float3', (0.0, 0.0, 1.0)),
+    ('diffuse', 'float3', (1.0, 1.0, 1.0)),
+    ('light_color', 'float3', (1.0, 1.0, 1.0)),
+    ('metallic', 'float', 0.0),
+    ('normal_amount', 'float', 0.0),
+    ('roughness', 'float', 0.0),
+    ('specular_color', 'float3', (1.0, 1.0, 1.0)),
+    ('specular_diffuse_blend', 'float', 0.0),
+
+    ('albedo', 'texture'),
+    ('normal', 'normal'),
+    ('param_cm0_cm1_occ', 'texture'),
+    ('param_r_m_occ_light', 'texture_alpha')
+],
 }
