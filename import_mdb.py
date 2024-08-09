@@ -356,7 +356,11 @@ def parse_mdb(f):
     texture_offset = read_uint(f)
 
     assert magic == b'MDB0'
-    assert file_version == 0x14 or file_version == 0x20
+    
+    if override_version != 0:
+        file_version = override_version
+    else:
+        assert file_version == 0x14 or file_version == 0x20
     if file_version == 0x20:
         global is_edf6
         is_edf6 = True
@@ -377,6 +381,10 @@ def warnparam(input, material, param):
 
 # Main function
 def load(operator, context, filepath='', **kwargs):
+    global ignore_errors
+    ignore_errors = operator.option_ignore_errors
+    global override_version
+    override_version = operator.option_override_version
     # Parse MDB
     with open(filepath, 'rb') as f:
         mdb = parse_mdb(f)
@@ -499,7 +507,7 @@ def load(operator, context, filepath='', **kwargs):
                 break
         unhandled = 0
 
-        shader = get_shader(mdb_material['shader'])
+        shader = get_shader(mdb_material['shader'], ignore_errors)
         if shader.has_alpha and material.blend_method == 'OPAQUE':
             material.blend_method = 'HASHED'
 

@@ -216,6 +216,8 @@ class Shader:
                 specular_input = 'Specular' if IS_BPY_V3 else 'Specular IOR Level'
                 shader_tree.links.new(bsdf.inputs[specular_input], self.get_or_split('reflect'))
             # TODO: How to handle specular?
+        elif ignore_errors:
+            print('Warning: MDB uses unknown shader ' + shader)
         else:
             raise Exception('MDB uses unknown shader ' + shader + 
                             ' processing halted because resulting import would fail to export.')
@@ -253,7 +255,9 @@ class Shader:
         self.shader_tree.links.new(offset_add.inputs[1], self.group_inputs.outputs[prefix + 'fall_off_offset'])
         return offset_add.outputs['Value']
 
-def get_shader(shader_name):
+def get_shader(shader_name, option_ignore_errors):
+    global ignore_errors;
+    ignore_errors = option_ignore_errors
     if shader_name in shader_cache:
         shader = shader_cache[shader_name]
         # How to properly check if the node group is still valid?
