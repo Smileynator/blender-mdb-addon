@@ -136,15 +136,31 @@ class ImportCANM(bpy.types.Operator, ImportHelper):
     filename_ext = ".canm"
     filter_glob: StringProperty(default="*.canm", options={'HIDDEN'})
 
+    option_override_version: IntProperty(
+        name="Override Version Int",
+        description="Ignores the file version Int, instead uses this if non 0. 512 == EDF5, ??? == EDF6",
+        default=0,
+    )
+
+    option_ignore_errors: BoolProperty(
+        name="Ignore Errors",
+        description="Catch and ignore any known errors, instead of stopping import. Will break exports!",
+        default=False,
+    )
+
     def execute(self, context):
         from . import import_canm
-
         keywords = self.as_keywords(ignore=())
-
         return import_canm.load(self, context, **keywords)
 
     def draw(self, context):
-        pass
+        layout = self.layout
+        layout.prop(self, "option_override_version")
+        layout.prop(self, "option_ignore_errors")
+    
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
 
 
 class ExportCANM(bpy.types.Operator, ExportHelper):

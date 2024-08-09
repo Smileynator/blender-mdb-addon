@@ -138,16 +138,21 @@ def parse_canm(f):
     canm = {}
     f.seek(0)
     file_signature = f.read(4)
-    version = read_uint(f)
-    assert file_signature == b'CANM'
-    assert version == 512
-
+    file_version = read_uint(f)
     anm_data_count = read_uint(f)
     anm_data_offset = read_uint(f)
     anm_point_count = read_uint(f)
     anm_point_offset = read_uint(f)
     anm_bone_count = read_uint(f)
     anm_bone_offset = read_uint(f)
+    
+    assert file_signature == b'CANM'
+
+    if override_version != 0:
+        file_version = override_version
+    else:
+        assert file_version == 512
+
 
     canm['animations'] = parse_anm_data(f, anm_data_count, anm_data_offset)
     canm['anm_points'] = parse_anm_point(f, anm_point_count, anm_point_offset)
@@ -288,6 +293,8 @@ def create_action_with_animation(armature_obj, animation, canm):
 
 
 def load(operator, context, filepath='', **kwargs):
+    global override_version
+    override_version = operator.option_override_version
     # Parse CANM file
     with open(filepath, 'rb') as f:
         canm = parse_canm(f)
