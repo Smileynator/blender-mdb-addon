@@ -388,14 +388,17 @@ def load(operator, context, filepath='', **kwargs):
     # Parse MDB
     with open(filepath, 'rb') as f:
         mdb = parse_mdb(f)
-
     if bpy.ops.object.mode_set.poll():
         bpy.ops.object.mode_set(mode="OBJECT")
+    # Create all Blender parts
+    create_unswizzle_node()
+    materials = create_materials(mdb, filepath)
+    armature_obj = create_bone_structures(mdb, context, filepath)
+    create_mesh_objects(mdb, armature_obj, context, materials)
+    return {'FINISHED'}
 
-    # Texture cache
-    textures = {}
 
-    # Create unswizzle node group
+def create_unswizzle_node():
     if bpy.data.node_groups.get('Normal Unswizzle') is None:
         nspace = 160
         unswizzle = bpy.data.node_groups.new('Normal Unswizzle', 'ShaderNodeTree')
@@ -484,19 +487,20 @@ def load(operator, context, filepath='', **kwargs):
         new_socket(unswizzle, 'Color', 'OUTPUT', 'NodeSocketColor')
         unswizzle.links.new(group_outputs.inputs['Color'], combineRGB.outputs['Image'])
 
-    # Create materials
+
+def create_materials(mdb, filepath):
     materials = []
     for mdb_material in mdb['materials']:
-        lshader = mdb_material['shader'].lower()
+        shaderName = mdb_material['shader'].lower()
         material = bpy.data.materials.new(mdb_material['name'])
         # Custom properties
         material['render_priority'] = mdb_material['render_priority']
         material['render_layer'] = mdb_material['render_layer']
         material['render_type'] = mdb_material['render_type']
-        
-        if lshader.endswith('_alpha') or lshader.endswith('_hair'):
+
+        if shaderName.endswith('_alpha') or shaderName.endswith('_hair'):
             material.blend_method = 'HASHED'
-        elif lshader.endswith('_clip'):
+        elif shaderName.endswith('_clip'):
             material.blend_method = 'CLIP'
         material.use_nodes = True
         mat_nodes = material.node_tree
@@ -505,7 +509,6 @@ def load(operator, context, filepath='', **kwargs):
             if node.type == 'BSDF_PRINCIPLED':
                 mat_nodes.nodes.remove(node)
                 break
-        unhandled = 0
 
         shader = get_shader(mdb_material['shader'], ignore_errors)
         if shader.has_alpha and material.blend_method == 'OPAQUE':
@@ -516,103 +519,116 @@ def load(operator, context, filepath='', **kwargs):
             if node.type == 'OUTPUT_MATERIAL':
                 mat_out = node
                 break
-        shader_node = material.node_tree.nodes.new('ShaderNodeGroup')
-        shader_node.node_tree = shader.shader_tree
-        shader_node.show_options = False
-        shader_node.width = 240
-        shader_node.location[1] = mat_out.location[1]
+        shader_node = create_shader_node(material, shader, mat_out)
         mat_nodes.links.new(mat_out.inputs['Surface'], shader_node.outputs['Surface'])
 
-        # Set up material parameters
-        for param in mdb_material['params']:
-            if param['size'] == 1:
-                input_node = warnparam(shader_node.inputs.get(param['name']), mdb_material, param)
-                if input_node is not None:
-                    input_node.default_value = param['val0']
-            elif param['size'] == 2:
-                input_x = warnparam(shader_node.inputs.get(param['name'] + '_x'), mdb_material, param)
-                if input_x is not None:
-                    input_y = shader_node.inputs.get(param['name'] + '_y')
-                    input_x.default_value = param['val0']
-                    input_y.default_value = param['val1']
-            elif param['size'] == 4:
-                input_col = warnparam(shader_node.inputs.get(param['name']), mdb_material, param)
-                if input_col is not None:
-                    input_alpha = shader_node.inputs.get(param['name'] + '_alpha')
-                    input_col.default_value = (param['val0'], param['val1'], param['val2'], 1)
-                    # It's okay for alpha to be missing, there are no parameters of size 3
-                    if input_alpha is not None:
-                        input_alpha.default_value = param['val3']
-
-        # Add all material textures
-        for texture in mdb_material['textures']:
-            txr_map = texture['map']
-            texImage = mat_nodes.nodes.new('ShaderNodeTexImage')
-            filename = mdb['textures'][texture['texture']]['filename']
-            if filename in textures:
-                texImage.image = textures[filename]
-            else:
-                #Try and load texture from HD or SD folder
-                image = None
-                try:
-                    image = bpy.data.images.load(os.path.join(os.path.dirname(filepath), '..', 'HD-TEXTURE', filename))
-                except RuntimeError as e: # Ignore texture import error
-                    print("Failed to find HD texture. Trying SD texture.")
-                if image is None:
-                    try:
-                        image = bpy.data.images.load(os.path.join(os.path.dirname(filepath), '..', 'TEXTURE', filename))
-                    except RuntimeError as e: # Ignore texture import error
-                        print("Failed to find SD texture.")
-                        print(e)
-                if image is not None:
-                    texImage.image = image
-                    textures[filename] = image
-                    # Why is Straight being treated as Premultiplied by cycles?
-                    image.alpha_mode = 'CHANNEL_PACKED'
-                    if 'albedo' not in txr_map and 'diffuse' not in txr_map:
-                        image.colorspace_settings.name = 'Non-Color'
-
-            texImage.location[0] = shader_node.location[0] - 700 + unhandled * 40
-            texImage.location[1] = shader_node.location[1] - unhandled * 40
-            unhandled += 1
-            input_col = shader_node.inputs.get(txr_map)
-            if input_col is not None:
-                if txr_map == 'normal' or txr_map == 'damage_normal':
-                    # Unswizzle normal map
-                    unswizzle = material.node_tree.nodes.new('ShaderNodeGroup')
-                    unswizzle.location[0] = shader_node.location[0] - 350
-                    unswizzle.node_tree = bpy.data.node_groups.get('Normal Unswizzle')
-                    unswizzle.show_options = False
-                    material.node_tree.links.new(unswizzle.inputs['Color'], texImage.outputs['Color'])
-                    material.node_tree.links.new(unswizzle.inputs['Alpha'], texImage.outputs['Alpha'])
-
-                    # Connect fixed normal map
-                    normalMap = mat_nodes.nodes.new('ShaderNodeNormalMap')
-                    normalMap.location[0] = shader_node.location[0] - 200
-                    mat_nodes.links.new(normalMap.inputs['Color'], unswizzle.outputs['Color'])
-                    mat_nodes.links.new(input_col, normalMap.outputs['Normal'])
-                else:
-                    input_alpha = shader_node.inputs.get(txr_map + '_alpha')
-                    mat_nodes.links.new(input_col, texImage.outputs['Color'])
-                    if input_alpha is not None:
-                        mat_nodes.links.new(input_alpha, texImage.outputs['Alpha'])
-                param = shader.param_map[txr_map]
-                if len(param) >= 3:
-                    uvmap = mat_nodes.nodes.new('ShaderNodeUVMap')
-                    uvmap.location[0] = texImage.location[0] - 200
-                    uvmap.location[1] = texImage.location[1] - 200
-                    uvmap.uv_map = 'UVMap' + str(param[2]+1)
-                    mat_nodes.links.new(texImage.inputs['Vector'], uvmap.outputs['UV'])
+        setup_params(mdb_material['params'], shader_node, mdb_material)
+        setup_textures(mdb_material['textures'], shader_node, mat_nodes, mdb, filepath, material, shader)
 
         # Deselect all nodes
         for node in mat_nodes.nodes:
             node.select = False
-
         materials.append(material)
+    return materials
 
-    # Add armature and bones
+
+def create_shader_node(material, shader, mat_out):
+    shader_node = material.node_tree.nodes.new('ShaderNodeGroup')
+    shader_node.node_tree = shader.shader_tree
+    shader_node.show_options = False
+    shader_node.width = 240
+    shader_node.location[1] = mat_out.location[1]
+    return shader_node
+
+
+def setup_params(material_params, shader_node, mdb_material):
+    for param in material_params:
+        if param['size'] == 1:
+            input_node = warnparam(shader_node.inputs.get(param['name']), mdb_material, param)
+            if input_node is not None:
+                input_node.default_value = param['val0']
+        elif param['size'] == 2:
+            input_x = warnparam(shader_node.inputs.get(param['name'] + '_x'), mdb_material, param)
+            if input_x is not None:
+                input_y = shader_node.inputs.get(param['name'] + '_y')
+                input_x.default_value = param['val0']
+                input_y.default_value = param['val1']
+        elif param['size'] == 4:
+            input_col = warnparam(shader_node.inputs.get(param['name']), mdb_material, param)
+            if input_col is not None:
+                input_alpha = shader_node.inputs.get(param['name'] + '_alpha')
+                input_col.default_value = (param['val0'], param['val1'], param['val2'], 1)
+                # It's okay for alpha to be missing, there are no parameters of size 3
+                if input_alpha is not None:
+                    input_alpha.default_value = param['val3']
+
+
+def setup_textures(material_textures, shader_node, mat_nodes, mdb, filepath, material, shader):
+    unhandled = 0
+    textures = {}
+    for texture in material_textures:
+        txr_map = texture['map']
+        texImage = mat_nodes.nodes.new('ShaderNodeTexImage')
+        filename = mdb['textures'][texture['texture']]['filename']
+        if filename in textures:
+            texImage.image = textures[filename]
+        else:
+            #Try and load texture from HD or SD folder
+            image = None
+            try:
+                image = bpy.data.images.load(os.path.join(os.path.dirname(filepath), '..', 'HD-TEXTURE', filename))
+            except RuntimeError as e: # Ignore texture import error
+                print("Failed to find HD texture. Trying SD texture.")
+            if image is None:
+                try:
+                    image = bpy.data.images.load(os.path.join(os.path.dirname(filepath), '..', 'TEXTURE', filename))
+                except RuntimeError as e: # Ignore texture import error
+                    print("Failed to find SD texture.")
+                    print(e)
+            if image is not None:
+                texImage.image = image
+                textures[filename] = image
+                # Why is Straight being treated as Premultiplied by cycles?
+                image.alpha_mode = 'CHANNEL_PACKED'
+                if 'albedo' not in txr_map and 'diffuse' not in txr_map:
+                    image.colorspace_settings.name = 'Non-Color'
+
+        texImage.location[0] = shader_node.location[0] - 700 + unhandled * 40
+        texImage.location[1] = shader_node.location[1] - unhandled * 40
+        unhandled += 1
+        input_col = shader_node.inputs.get(txr_map)
+        if input_col is not None:
+            if txr_map == 'normal' or txr_map == 'damage_normal':
+                # Unswizzle normal map
+                unswizzle = material.node_tree.nodes.new('ShaderNodeGroup')
+                unswizzle.location[0] = shader_node.location[0] - 350
+                unswizzle.node_tree = bpy.data.node_groups.get('Normal Unswizzle')
+                unswizzle.show_options = False
+                material.node_tree.links.new(unswizzle.inputs['Color'], texImage.outputs['Color'])
+                material.node_tree.links.new(unswizzle.inputs['Alpha'], texImage.outputs['Alpha'])
+
+                # Connect fixed normal map
+                normalMap = mat_nodes.nodes.new('ShaderNodeNormalMap')
+                normalMap.location[0] = shader_node.location[0] - 200
+                mat_nodes.links.new(normalMap.inputs['Color'], unswizzle.outputs['Color'])
+                mat_nodes.links.new(input_col, normalMap.outputs['Normal'])
+            else:
+                input_alpha = shader_node.inputs.get(txr_map + '_alpha')
+                mat_nodes.links.new(input_col, texImage.outputs['Color'])
+                if input_alpha is not None:
+                    mat_nodes.links.new(input_alpha, texImage.outputs['Alpha'])
+            param = shader.param_map[txr_map]
+            if len(param) >= 3:
+                uvmap = mat_nodes.nodes.new('ShaderNodeUVMap')
+                uvmap.location[0] = texImage.location[0] - 200
+                uvmap.location[1] = texImage.location[1] - 200
+                uvmap.uv_map = 'UVMap' + str(param[2]+1)
+                mat_nodes.links.new(texImage.inputs['Vector'], uvmap.outputs['UV'])
+
+
+def create_bone_structures(mdb, context, filepath):
     armature = bpy.data.armatures.new('Armature')
-    armature_obj = bpy.data.objects.new(os.path.splitext(os.path.basename(filename))[0], armature)
+    armature_obj = bpy.data.objects.new(os.path.splitext(os.path.basename(filepath))[0], armature)
     context.scene.collection.objects.link(armature_obj)
     context.view_layer.objects.active = armature_obj
     bpy.ops.object.mode_set(mode='EDIT', toggle=False)
@@ -639,13 +655,15 @@ def load(operator, context, filepath='', **kwargs):
         # Add bone to bone list
         bones.append(bone)
     bpy.ops.object.mode_set(mode='OBJECT')
+    return armature_obj
 
-    # Add meshes
-    for object in mdb['objects']:
-        name = object['name']
+
+def create_mesh_objects(mdb, armature_obj, context, materials):
+    for obj in mdb['objects']:
+        name = obj['name']
         empty = bpy.data.objects.new(name, None)
         context.scene.collection.objects.link(empty)
-        for mdb_mesh in object['meshes']:
+        for mdb_mesh in obj['meshes']:
             vertices = mdb_mesh['vertices']
 
             # Read indices
@@ -719,10 +737,10 @@ def load(operator, context, filepath='', **kwargs):
 
             # Assign material
             if mdb_mesh['material'] != -1:
-                mesh.materials.append(materials[mdb_mesh['material']])
+                material_number = mdb_mesh['material']
+                mesh.materials.append(materials[material_number])
 
             mesh.update()
 
             context.scene.collection.objects.link(mesh_obj)
             mesh_obj.parent = empty
-    return {'FINISHED'}
