@@ -510,7 +510,7 @@ def create_materials(mdb, filepath):
                 mat_nodes.nodes.remove(node)
                 break
 
-        shader = get_shader(mdb_material['shader'], ignore_errors)
+        shader = get_shader(mdb_material, ignore_errors)
         if shader.has_alpha and material.blend_method == 'OPAQUE':
             material.blend_method = 'HASHED'
 
