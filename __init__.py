@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Earth Defense Force Formats",
     "author": "Smileynator / BlueAmulet",
-    "version": (1, 6, 6),
+    "version": (1, 6, 7),
     "blender": (3, 6, 0),
     "location": "File > Import-Export",
     "description": "Import-Export MDB, CANM, mesh, UV's, materials, textures, Animations from Earth Defense Force",
@@ -74,7 +74,7 @@ class ImportMDB(bpy.types.Operator, ImportHelper):
 
 class ExportMDB_5(bpy.types.Operator, ExportHelper):
     """Write a MDB file"""
-    bl_idname = "export_scene.mdb"
+    bl_idname = "export_scene_edf5.mdb"
     bl_label = "Export MDB EDF5"
     bl_options = {'UNDO', 'PRESET'}
 
@@ -101,7 +101,7 @@ class ExportMDB_5(bpy.types.Operator, ExportHelper):
 
 class ExportMDB_6(bpy.types.Operator, ExportHelper):
     """Write a MDB file"""
-    bl_idname = "export_scene.mdb"
+    bl_idname = "export_scene_edf6.mdb"
     bl_label = "Export MDB EDF6"
     bl_options = {'UNDO', 'PRESET'}
 
@@ -163,10 +163,10 @@ class ImportCANM(bpy.types.Operator, ImportHelper):
         return {'RUNNING_MODAL'}
 
 
-class ExportCANM(bpy.types.Operator, ExportHelper):
+class ExportCANM_5(bpy.types.Operator, ExportHelper):
     """Write a CANM file"""
-    bl_idname = "export_scene.canm"
-    bl_label = "Export CANM"
+    bl_idname = "export_scene_edf5.canm"
+    bl_label = "Export CANM EDF5"
     bl_options = {'UNDO', 'PRESET'}
 
     filename_ext = ".CANM"
@@ -198,7 +198,7 @@ def menu_func_import(self, context):
 def menu_func_export(self, context):
     self.layout.operator(ExportMDB_5.bl_idname, text="Earth Defense Force 5 Model (.mdb)")
     self.layout.operator(ExportMDB_6.bl_idname, text="Earth Defense Force 6 Model (.mdb)")
-    self.layout.operator(ExportCANM.bl_idname, text="Earth Defense Force Animation (.canm)")
+    self.layout.operator(ExportCANM_5.bl_idname, text="Earth Defense Force 5 Animation (.canm)")
 
 
 classes = (
@@ -206,7 +206,7 @@ classes = (
     ExportMDB_5,
     ExportMDB_6,
     ImportCANM,
-    ExportCANM,
+    ExportCANM_5,
 )
 
 
