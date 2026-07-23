@@ -589,12 +589,12 @@ def load(operator, context, filepath='', **kwargs):
                     input_y = shader_node.inputs.get(param['name'] + '_y')
                     input_x.default_value = param['val0']
                     input_y.default_value = param['val1']
-            elif param['size'] == 4:
+            elif param['size'] >= 3:
                 input_col = warnparam(shader_node.inputs.get(param['name']), mdb_material, param)
                 if input_col is not None:
                     input_alpha = shader_node.inputs.get(param['name'] + '_alpha')
                     input_col.default_value = (param['val0'], param['val1'], param['val2'], 1)
-                    # It's okay for alpha to be missing, there are no parameters of size 3
+                    # Only RGBA parameters expose a separate editable alpha socket.
                     if input_alpha is not None:
                         input_alpha.default_value = param['val3']
 

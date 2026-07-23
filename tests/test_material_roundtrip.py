@@ -107,6 +107,7 @@ class MaterialRoundTripTests(unittest.TestCase):
     fixtures = (
         FIXTURE_ROOT / "E503_FROG" / "MODEL" / "e503_frog.mdb",
         FIXTURE_ROOT / "E505_GENERATOR" / "MODEL" / "e505_generator.mdb",
+        FIXTURE_ROOT / "P506_WINGDIVER" / "MODEL" / "p506_wingDiver.mdb",
     )
 
     def test_fixture_material_blocks_round_trip_without_field_loss(self):

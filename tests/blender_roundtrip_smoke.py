@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -30,6 +31,7 @@ def main():
     separator = sys.argv.index("--")
     input_path = Path(sys.argv[separator + 1]).resolve()
     output_path = Path(sys.argv[separator + 2]).resolve()
+    export_version = int(sys.argv[separator + 3]) if len(sys.argv) > separator + 3 else 5
     addon_root = Path(__file__).resolve().parents[1]
 
     load_addon(addon_root)
@@ -53,12 +55,27 @@ def main():
         for parameter in parameters:
             name = parameter["name"]
             if parameter["size"] == 2:
-                assert shader_node.inputs.get(name + "_x") is not None
-                assert shader_node.inputs.get(name + "_y") is not None
+                input_x = shader_node.inputs.get(name + "_x")
+                input_y = shader_node.inputs.get(name + "_y")
+                assert input_x is not None
+                assert input_y is not None
+                assert math.isclose(input_x.default_value, parameter["val0"])
+                assert math.isclose(input_y.default_value, parameter["val1"])
             else:
-                assert shader_node.inputs.get(name) is not None
+                material_input = shader_node.inputs.get(name)
+                assert material_input is not None
+                if parameter["size"] == 1:
+                    assert math.isclose(material_input.default_value, parameter["val0"])
+                elif parameter["size"] >= 3:
+                    for component in range(3):
+                        assert math.isclose(
+                            material_input.default_value[component],
+                            parameter[f"val{component}"],
+                        )
             if parameter["type"] == 3:
-                assert shader_node.inputs.get(name + "_alpha") is not None
+                alpha_input = shader_node.inputs.get(name + "_alpha")
+                assert alpha_input is not None
+                assert math.isclose(alpha_input.default_value, parameter["val3"])
 
         parameter_names = {parameter["name"] for parameter in parameters}
         texture_nodes = [
@@ -93,7 +110,7 @@ def main():
         object(),
         bpy.context,
         filepath=str(output_path),
-        version=5,
+        version=export_version,
     )
     assert output_path.exists()
 
