@@ -16,7 +16,7 @@ Very little error catching has been implemented, so expect some problems.
 - Importing of any .canm Animations on top of a model (EDF5 only)
 - Exporting of any .canm Animations from a model (EDF5 only)
 - Bone support
-- Material variable support (Not material editing!)
+- Editable MDB material parameters with lossless material-data preservation
 - Mesh editing support
 - Weight painting support
 - UV Mapping support
@@ -38,6 +38,25 @@ Shader details might be incomplete, but most of the visual aspects should be the
 
 Models make use of some extra data we either cannot support in Blender or do not know what they exactly do. For the time being those are stored as Custom Properties on the Bones and Materials.
 
+## Editing MDB materials
+
+The shader group in Blender has two related but distinct jobs:
+
+1. Its unlinked numeric and color inputs expose parameters that actually exist in the imported MDB material. Edit these input values to change what is exported.
+2. Its texture, normal, and other node connections produce a useful Blender preview. These connections are not themselves the MDB material record.
+
+A connected Blender socket ignores its displayed fallback value. For example, `damage_normal` is an MDB texture binding rather than a stored vector. If its normal-map connection is removed, Blender displays the socket fallback `(0, 0, 0)`. That fallback is not an MDB value and does not overwrite the texture binding.
+
+For lossless round trips:
+
+- Disconnecting a texture node does not remove that texture from MDB export. Texture bindings are preserved independently of preview links.
+- Connecting a Blender Value or RGB node to a numeric parameter does not export the evaluated connection. Edit the shader-group input's own value instead.
+- Parameters and defaults that exist only in the shader preview lookup are never added to the exported MDB.
+- Parameter order, declared type and component count, unused float slots, shader name, texture-table identity, and sampler overrides are retained separately when Blender has no native socket representation for them.
+- Unknown shaders can still be imported and exported. They receive a generic editable preview containing the parameters and texture-slot names found in the MDB.
+
+Each imported material includes an `MDB Editing Notes` frame in the Shader Editor containing a short version of these rules.
+
 Model animations and hitboxes are not stored in the model file, these have to be edited externally.
 
 The game interally heavily relies on specific naming structures we have not defined yet. So renaming or removing of Bones, Materials and Objects is highly discouraged. Doing this anyway might result in incorrect dismemberment mechanics, crashes during gameplay, broken animations, missing hitboxes, etc.
@@ -46,7 +65,7 @@ Try keeping editing of the materials to a minimal, mostly they are for setting u
 
 Custom Properties you should know about:
 - Bones have 'unknown_ints[0]' that might be related to groupings. the value 3 seems to be assigned to all bones that actually need to hold meshes that have weight painting.
-- Materials have 3 custom properties.
+- Materials retain MDB identity and material-table metadata in addition to the following render properties.
   - Render Priority is literral ordering. If 2 transparent objects exist, and one has higher render priority, it will show up in the front.
   - Render Layer is normally 0 for opaque objects, and 2 on transparent and UI elements.
   - Render Type is almost always 3, but seems to be set to 2 for objects which "update" their texture, like fill bars, or the shield bearer's shield.

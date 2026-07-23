@@ -10,6 +10,18 @@ from struct import unpack
 from .shader import new_socket, get_shader
 
 is_edf6 = False
+MDB_EDITING_NOTES = """MDB material editing
+
+- Unlinked numeric/color inputs on the shader group are MDB parameters and are exported.
+- Texture and normal connections build the Blender preview. A connected socket's fallback
+  value is ignored and is not an MDB value.
+- Disconnecting a texture does not remove its MDB binding; bindings are preserved separately.
+- Connecting a Blender Value/RGB node does not export the evaluated result. Edit the shader
+  group's own input value instead.
+- Lookup-only preview defaults are never added to the exported MDB.
+
+See README.md, \"Editing MDB materials\", for the complete rules.
+"""
 # Original model is Y UP, but blender is Z UP by default, we convert that here.
 bone_up_Y = mathutils.Matrix(((1.0, 0.0, 0.0, 0.0),
                             (0.0, 0.0, -1.0, 0.0),
@@ -394,6 +406,27 @@ def warnparam(input, material, param):
     return input
 
 
+def add_material_editing_note(node_tree, shader_node):
+    text = bpy.data.texts.get('MDB Editing Notes')
+    if text is None:
+        text = bpy.data.texts.new('MDB Editing Notes')
+        text.write(MDB_EDITING_NOTES)
+
+    note = node_tree.nodes.new('NodeFrame')
+    note.name = 'MDB Editing Notes'
+    note.label = 'MDB Editing Notes — preview links vs exported data'
+    note.text = text
+    note.shrink = False
+    note.label_size = 18
+    note.width = 520
+    note.height = 230
+    note.location[0] = shader_node.location[0] - 260
+    note.location[1] = shader_node.location[1] + 420
+    note.use_custom_color = True
+    note.color = (0.12, 0.22, 0.32)
+    note.select = False
+
+
 # Main function
 def load(operator, context, filepath='', **kwargs):
     global ignore_errors
@@ -542,6 +575,7 @@ def load(operator, context, filepath='', **kwargs):
         shader_node.width = 240
         shader_node.location[1] = mat_out.location[1]
         mat_nodes.links.new(mat_out.inputs['Surface'], shader_node.outputs['Surface'])
+        add_material_editing_note(mat_nodes, shader_node)
 
         # Set up material parameters
         for param in mdb_material['params']:

@@ -67,6 +67,12 @@ def main():
         assert len(texture_nodes) == len({
             node["mdb_texture_binding"] for node in texture_nodes
         })
+        editing_notes = [
+            node for node in material.node_tree.nodes
+            if node.type == "FRAME" and node.name == "MDB Editing Notes"
+        ]
+        assert len(editing_notes) == 1
+        assert editing_notes[0].text is not None
 
     export_mdb.save(
         object(),
