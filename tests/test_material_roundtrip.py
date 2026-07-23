@@ -42,7 +42,6 @@ def load_material_modules():
     package.__path__ = [str(ADDON_ROOT)]
     sys.modules.setdefault("_mdb_test_addon", package)
 
-    load_addon_module("shader_data")
     load_addon_module("shader")
     return load_addon_module("import_mdb"), load_addon_module("export_mdb")
 

@@ -7,8 +7,6 @@ import json
 import mathutils
 import numpy as np
 
-from .shader_data import shaders as shader_data
-
 gameVersion = 0
 # Original model is Y UP, but blender is Z UP by default, we convert that here.
 bone_up_Y = mathutils.Matrix(((1.0, 0.0, 0.0, 0.0),
@@ -256,7 +254,7 @@ def get_materials(indexed_strings, textures):
             for input in node.inputs:
                 if (not input.is_linked) or input.name.endswith('_y') or input.name.endswith('_alpha'):
                     continue
-                if is_texture_node(node.node_tree.name, input.name):
+                if find_parent_texture_node(input) is not None:
                     texture_data.append(get_texture(input, textures))
                 else:
                     parameters.append(get_parameter(node.inputs, input))
@@ -274,7 +272,9 @@ def find_mdb_shader_node(material):
     for node in material.node_tree.nodes:
         if not hasattr(node, 'inputs') or node.type != 'GROUP':
             continue
-        if 'mdb_shader_name' in node or node.node_tree.name in shader_data:
+        if 'mdb_shader_name' in node:
+            return node
+        if node.node_tree is not None and node.node_tree.outputs.get('Surface') is not None:
             return node
     return None
 
@@ -318,18 +318,6 @@ def get_preserved_texture(image_node):
         'max_lod': image_node.get('mdb_max_lod', 0.0),
         'lod_bias': image_node.get('mdb_lod_bias', 0.0),
     }
-
-
-# Return true of this is a texture type parameter, hope there are no name clashes
-def is_texture_node(shader, input_name):
-    if shader in shader_data:
-        properties = shader_data[shader]
-        for prop in properties:
-            if prop[0] == input_name and prop[1] in ['normal', 'texture', 'texture_alpha']:
-                return True
-    else:
-        print(f"Warning: Shader {shader} not found!")
-    return False
 
 
 # Gets the parameters relevant data for this node input

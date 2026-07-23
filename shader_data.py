@@ -1,3 +1,8 @@
+"""Retired shader-name recipes retained only as a preview coverage oracle.
+
+Production import, preview construction, and export must not import this module.
+"""
+
 shaders = {
 'snd_BeamShield': [
 ('scroll_light0', 'float2', (0.0, 0.0)),

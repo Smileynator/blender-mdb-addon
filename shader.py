@@ -1,298 +1,376 @@
+import re
+
 import bpy
 
-from .shader_data import shaders as shader_data
 
 IS_BPY_V3 = bpy.app.version < (4, 0, 0)
 
-# TODO: This has some issues
-# On new scene the shader_tree becomes invalid
-# On .blend load the shader_tree is invalid, and the old node groups still exist
-shader_cache={}
+# MDB does not store the UV set consumed by a shader texture. Common numbered
+# slots are inferable; genuinely exceptional shaders can be added here without
+# affecting material schema discovery or export.
+UV_EXCEPTIONS = {
+    ('snd_Chara_Basic_Light_damage', 'param_light_mask'): 1,
+    ('snd_Dino_LightScroll', 'param_occ_XXX_XXX_XXX'): 2,
+    ('snd_Dino_LightScroll_damage', 'param_occ_XXX_XXX_XXX'): 2,
+    ('snd_Map_Build_Basic', 'dirt'): 2,
+    ('snd_Map_Build_Basic', 'param_occlusion'): 1,
+    ('snd_Map_Build_Basic_NC', 'dirt'): 2,
+    ('snd_Map_Build_Basic_NC', 'param_occlusion'): 1,
+    ('snd_Map_Build_Basic_Parallax_NC', 'dirt'): 2,
+    ('snd_Map_Build_Basic_Parallax_NC', 'param_occlusion'): 1,
+    ('snd_Map_Build_DirtScroll', 'dirt'): 2,
+    ('snd_Map_Build_DirtScroll', 'param_occlusion'): 1,
+    ('snd_Map_Build_DirtScroll_NC', 'dirt'): 2,
+    ('snd_Map_Build_DirtScroll_NC', 'param_occlusion'): 1,
+    ('snd_Map_Build_DirtScroll_Parallax_NC', 'dirt'): 2,
+    ('snd_Map_Build_DirtScroll_Parallax_NC', 'param_occlusion'): 1,
+    ('snd_Map_Build_Light_NC', 'dirt'): 2,
+    ('snd_Map_Build_Light_NC', 'param_occlusion'): 1,
+    ('snd_Map_Build_NoOcc', 'dirt'): 1,
+    ('snd_Map_Build_Simple_Alpha', 'param_occlusion'): 1,
+    ('snd_Map_Build_Simple_Clip', 'param_occlusion'): 1,
+    ('snd_Map_Build_Window', 'interior_texture'): 1,
+    ('snd_Map_Build_Window', 'window_normal'): 2,
+    ('snd_Map_Cave_NoOcc', 'dirt'): 1,
+    ('snd_Map_Field_Basic', 'dirt'): 1,
+    ('snd_Map_Field_Parallax', 'dirt'): 1,
+    ('snd_Map_Object', 'param_occlusion'): 1,
+    ('snd_Map_Object_NoAO_Dirt', 'dirt'): 1,
+    ('snd_Map_Object_NoAO_Light', 'param_occlusion'): 1,
+    ('snd_Map_Object_NoCC', 'param_occlusion'): 1,
+    ('snd_Mech', 'param_occ_XXX_XXX_XXX'): 1,
+    ('snd_Mech_Catapillar', 'param_occlusion'): 1,
+    ('snd_Mech_Light', 'param_occlusion'): 1,
+    ('snd_Mech_Light_damage', 'param_occlusion'): 1,
+    ('snd_Mech_damage', 'param_occ_XXX_XXX_XXX'): 1,
+    ('snd_SoftMech', 'param_occ_XXX_XXX_XXX'): 1,
+    ('snd_UI_Clipping_UVAnim', 'albedo1'): 1,
+    ('snd_UI_GaugeBar', 'bar_mask'): 1,
+    ('snd_e505_Flare', 'mask0'): 1,
+    ('snd_e505_Flare', 'albedo1'): 2,
+    ('snd_e505_Flare', 'mask1'): 3,
+}
+
+shader_cache = {}
+
 
 def new_socket(node_tree, name, in_out, socket_type):
-    global IS_BPY_V3
     if IS_BPY_V3:
         if in_out == 'INPUT':
             node_tree.inputs.new(socket_type, name)
         elif in_out == 'OUTPUT':
             node_tree.outputs.new(socket_type, name)
         else:
-            raise TypeError(f'new_socket(): error with argument in_out - "{in_out}" not "INPUT" or "OUTPUT"')
+            raise TypeError(f'Unsupported socket direction: {in_out}')
     else:
-        node_tree.interface.new_socket(name, description='', in_out=in_out, socket_type=socket_type)
+        node_tree.interface.new_socket(
+            name,
+            description='',
+            in_out=in_out,
+            socket_type=socket_type,
+        )
+
+
+def infer_uv_channel(shader_name, slot_name):
+    exception = UV_EXCEPTIONS.get((shader_name, slot_name))
+    if exception is not None:
+        return exception
+
+    match = re.fullmatch(r'light(\d+)_(?:scroll|tex)', slot_name)
+    if match:
+        return int(match.group(1)) + 1
+
+    match = re.fullmatch(r'(?:normal|parallax)_map(\d+)', slot_name)
+    if match:
+        return max(0, int(match.group(1)) - 1)
+
+    return 0
+
+
+def material_signature(material):
+    if material is None:
+        return (), (), 0
+    parameters = tuple(
+        (parameter['name'], parameter['type'], parameter['size'])
+        for parameter in material['params']
+    )
+    textures = tuple(texture['map'] for texture in material['textures'])
+    return parameters, textures, material.get('render_layer', 0)
+
 
 class Shader:
-    def __init__(self, shader, material=None):
-        shader_tree = bpy.data.node_groups.new(shader, 'ShaderNodeTree')
-        group_inputs = shader_tree.nodes.new('NodeGroupInput')
-        group_inputs.location[0] = -200
-        group_outputs = shader_tree.nodes.new('NodeGroupOutput')
-        group_outputs.location[0] = 500
-        new_socket(shader_tree, 'Surface', 'OUTPUT', 'NodeSocketShader')
-
-        self.shader_tree = shader_tree
-        self.group_inputs = group_inputs
-        self.split_map = {}
+    def __init__(self, shader_name, material):
+        self.name = shader_name
+        self.material = material or {'params': [], 'textures': [], 'render_layer': 0}
+        self.parameters = {
+            parameter['name']: parameter
+            for parameter in self.material['params']
+        }
+        self.textures = {
+            texture['map']
+            for texture in self.material['textures']
+        }
         self.param_map = {}
-        multi_tex={}
-        self.multi_tex = multi_tex
+        self.split_map = {}
+        self.packed_components = {}
         self.has_alpha = False
         self.facing = None
-        if shader in shader_data:
-            params = {}
 
-# TODO so this shader thing looks up the default values to use in shader_data, 
-# while in reality we HAVE this data from the imported MDB, and we should probably try to just generate it from there instead?
+        shader_tree = bpy.data.node_groups.new(shader_name, 'ShaderNodeTree')
+        self.shader_tree = shader_tree
+        self.group_inputs = shader_tree.nodes.new('NodeGroupInput')
+        self.group_inputs.location[0] = -500
+        self.group_outputs = shader_tree.nodes.new('NodeGroupOutput')
+        self.group_outputs.location[0] = 500
+        new_socket(shader_tree, 'Surface', 'OUTPUT', 'NodeSocketShader')
 
-            # Map out multi purpose textures
-            for param in shader_data[shader]:
-                pname, ptype = param[:2]
-                self.param_map[pname] = param
-                if 'param_' in pname and (ptype == 'texture' or ptype == 'texture_alpha'):
-                    if pname == 'param_light_mask':
-                        multi_tex['lightmask']=(pname, 'R')
-                    else:
-                        comps = pname[pname.find('param_')+6:].split('_')
-                        for i in range(min(len(comps), 4)):
-                            if comps[i] == 'XXX':
-                                continue
-                            elif i == 0:
-                                multi_tex[comps[i]]=(pname, 'R')
-                            elif i == 1:
-                                multi_tex[comps[i]]=(pname, 'G')
-                            elif i == 2:
-                                multi_tex[comps[i]]=(pname, 'B')
-                            elif i == 3 and ptype == 'texture_alpha':
-                                multi_tex[comps[i]]=(pname + '_alpha',)
+        self.ensure_material_schema()
+        self.map_packed_textures()
+        self.build_preview()
 
-            # Setup all shader parameters
-            for param in shader_data[shader]:
-                pname, ptype = param[:2]
-                params[pname]=ptype
-                # Add inputs to shader
-                if ptype == 'normal':
-                    new_socket(shader_tree, pname, 'INPUT', 'NodeSocketVector')
-                elif ptype == 'float4' or ptype == 'texture_alpha':
-                    new_socket(shader_tree, pname, 'INPUT', 'NodeSocketColor')
-                    new_socket(shader_tree, pname + '_alpha', 'INPUT', 'NodeSocketFloat')
-                    group_inputs.outputs[pname].default_value = (1, 1, 1, 1)
-                    group_inputs.outputs[pname + '_alpha'].default_value = 1
-                elif ptype == 'float3' or ptype == 'texture':
-                    new_socket(shader_tree, pname, 'INPUT', 'NodeSocketColor')
-                    group_inputs.outputs[pname].default_value = (1, 1, 1, 1)
-                elif ptype == 'float2':
-                    new_socket(shader_tree, pname + '_x', 'INPUT', 'NodeSocketFloat')
-                    new_socket(shader_tree, pname + '_y', 'INPUT', 'NodeSocketFloat')
-                elif ptype == 'float':
-                    new_socket(shader_tree, pname, 'INPUT', 'NodeSocketFloat')
-
-                # Set up proper defaults
-                if len(param) > 2:
-                    default = param[2]
-                    if ptype == 'float4':
-                        group_inputs.outputs[pname].default_value = (*default[:3], 1)
-                        group_inputs.outputs[pname + '_alpha'].default_value = default[3]
-                    elif ptype == 'float3':
-                        group_inputs.outputs[pname].default_value = (*default, 1)
-                    elif ptype == 'float2':
-                        group_inputs.outputs[pname + '_x'].default_value = default[0]
-                        group_inputs.outputs[pname + '_y'].default_value = default[1]
-                    elif ptype == 'float':
-                        group_inputs.outputs[pname].default_value = default
-
-            # TODO: Connect inputs to various actual shaders
-            bsdf = shader_tree.nodes.new('ShaderNodeBsdfPrincipled')
-            bsdf.location[0] = 200
-            shader_tree.links.new(group_outputs.inputs['Surface'], bsdf.outputs['BSDF'])
-
-            # Connect simple inputs
-            self.normal = None
-            if 'normal' in params:
-                self.normal = group_inputs.outputs['normal']
-            elif 'damage_normal' in params:
-                self.normal = group_inputs.outputs['damage_normal']
-            if self.normal is not None:
-                shader_tree.links.new(bsdf.inputs['Normal'], self.normal)
-
-            if 'metallic' in params:
-                shader_tree.links.new(bsdf.inputs['Metallic'], group_inputs.outputs['metallic'])
-            if 'roughness' in params:
-                shader_tree.links.new(bsdf.inputs['Roughness'], group_inputs.outputs['roughness'])
-
-            # Setup shader color chain
-            color_input=None
-            if 'diffuse' in params and 'albedo' in params:
-                col_mul = shader_tree.nodes.new('ShaderNodeMixRGB')
-                col_mul.blend_type = 'MULTIPLY'
-                col_mul.inputs['Fac'].default_value = 1
-                shader_tree.links.new(col_mul.inputs['Color1'], group_inputs.outputs['diffuse'])
-                shader_tree.links.new(col_mul.inputs['Color2'], group_inputs.outputs['albedo'])
-                color_input = col_mul.outputs['Color']
-            elif 'diffuse' in params:
-                color_input = group_inputs.outputs['diffuse']
-            elif 'albedo' in params:
-                color_input = group_inputs.outputs['albedo']
-
-            if 'change_color0' in params and 'change_color1' in params and 'cm0' in multi_tex and 'cm1' in multi_tex:
-                col1_mix = shader_tree.nodes.new('ShaderNodeMixRGB')
-                col1_mix.inputs['Color1'].default_value = (1, 1, 1, 1)
-                shader_tree.links.new(col1_mix.inputs['Fac'], self.get_or_split('cm1'))
-                shader_tree.links.new(col1_mix.inputs['Color2'], group_inputs.outputs['change_color1'])
-                col0_mix = shader_tree.nodes.new('ShaderNodeMixRGB')
-                shader_tree.links.new(col0_mix.inputs['Fac'], self.get_or_split('cm0'))
-                shader_tree.links.new(col0_mix.inputs['Color1'], col1_mix.outputs['Color'])
-                shader_tree.links.new(col0_mix.inputs['Color2'], group_inputs.outputs['change_color0'])
-                if color_input is not None:
-                    col_mul = shader_tree.nodes.new('ShaderNodeMixRGB')
-                    col_mul.blend_type = 'MULTIPLY'
-                    col_mul.inputs['Fac'].default_value = 1
-                    shader_tree.links.new(col_mul.inputs['Color1'], color_input)
-                    shader_tree.links.new(col_mul.inputs['Color2'], col0_mix.outputs['Color'])
-                    color_input = col_mul.outputs['Color']
-                else:
-                    color_input = col0_mix.outputs['Color']
-
-            if color_input is not None:
-                shader_tree.links.new(bsdf.inputs['Base Color'], color_input)
-
-            # Setup alpha input
-            alpha_input = None
-            diffuse_alpha = None
-            if params.get('diffuse') == 'float4':
-                diffuse_alpha = 'diffuse_alpha'
-            elif params.get('alpha') == 'float':
-                diffuse_alpha = 'alpha'
-            if diffuse_alpha is not None and params.get('albedo') == 'texture_alpha':
-                alpha_mul = shader_tree.nodes.new('ShaderNodeMath')
-                alpha_mul.operation = 'MULTIPLY'
-                shader_tree.links.new(alpha_mul.inputs[0], group_inputs.outputs[diffuse_alpha])
-                shader_tree.links.new(alpha_mul.inputs[1], group_inputs.outputs['albedo_alpha'])
-                alpha_input = alpha_mul.outputs['Value']
-            elif diffuse_alpha is not None:
-                alpha_input = group_inputs.outputs[diffuse_alpha]
-            elif params.get('albedo') == 'texture_alpha':
-                alpha_input = group_inputs.outputs['albedo_alpha']
-            if alpha_input is not None:
-                if 'translucent_fall_off_offset' in params:
-                    tfo_mul = shader_tree.nodes.new('ShaderNodeMath')
-                    tfo_mul.operation = 'MULTIPLY'
-                    shader_tree.links.new(tfo_mul.inputs[0], alpha_input)
-                    shader_tree.links.new(tfo_mul.inputs[1], self.gen_edge_chain('translucent_'))
-                    alpha_input = tfo_mul.outputs['Value']
-                shader_tree.links.new(bsdf.inputs['Alpha'], alpha_input)
-            self.has_alpha = alpha_input is not None
-
-            # Setup emissive light
-            light_input=None
-            if 'light_color' in params and 'lightmask' in multi_tex:
-                light_mul = shader_tree.nodes.new('ShaderNodeMixRGB')
-                light_mul.blend_type = 'MULTIPLY'
-                light_mul.inputs['Fac'].default_value = 1
-                shader_tree.links.new(light_mul.inputs['Color1'], group_inputs.outputs['light_color'])
-                if 'hlightmask' in multi_tex:
-                    mask_mul = shader_tree.nodes.new('ShaderNodeMath')
-                    mask_mul.operation = 'MULTIPLY'
-                    shader_tree.links.new(mask_mul.inputs[0], self.get_or_split('lightmask'))
-                    shader_tree.links.new(mask_mul.inputs[1], self.get_or_split('hlightmask'))
-                    shader_tree.links.new(light_mul.inputs['Color2'], mask_mul.outputs['Value'])
-                else:
-                    shader_tree.links.new(light_mul.inputs['Color2'], self.get_or_split('lightmask'))
-                light_input = light_mul.outputs['Color']
-            elif 'light_color' in params:
-                light_input = group_inputs.outputs['light_color']
-            if light_input is not None:
-                if 'light_fall_off_offset' in params:
-                    lfo_mul = shader_tree.nodes.new('ShaderNodeMixRGB')
-                    lfo_mul.blend_type = 'MULTIPLY'
-                    lfo_mul.inputs['Fac'].default_value = 1
-                    shader_tree.links.new(lfo_mul.inputs['Color1'], light_input)
-                    shader_tree.links.new(lfo_mul.inputs['Color2'], self.gen_edge_chain('light_'))
-                    light_input = lfo_mul.outputs['Color']
-                emission_input = 'Emission' if IS_BPY_V3 else 'Emission Color'
-                shader_tree.links.new(bsdf.inputs[emission_input], light_input)
-
-            # Reflections
-            if 'reflect' in multi_tex:
-                specular_input = 'Specular' if IS_BPY_V3 else 'Specular IOR Level'
-                shader_tree.links.new(bsdf.inputs[specular_input], self.get_or_split('reflect'))
-            # TODO: How to handle specular?
-        else:
-            print('Warning: MDB uses unknown shader ' + shader + '; creating a generic editable preview.')
-            bsdf = shader_tree.nodes.new('ShaderNodeBsdfPrincipled')
-            bsdf.location[0] = 200
-            shader_tree.links.new(group_outputs.inputs['Surface'], bsdf.outputs['BSDF'])
-
-        if material is not None:
-            self.ensure_material_schema(material)
-
-        # Deselect all nodes
         for node in shader_tree.nodes:
             node.select = False
 
-    def ensure_material_schema(self, material):
-        """Expose every parameter and texture slot present in the MDB material."""
-        for param in material['params']:
-            name = param['name']
-            size = param['size']
+    def ensure_material_schema(self):
+        for parameter in self.material['params']:
+            name = parameter['name']
+            parameter_type = parameter['type']
+            size = parameter['size']
             if size == 1:
                 self.ensure_input(name, 'NodeSocketFloat')
             elif size == 2:
                 self.ensure_input(name + '_x', 'NodeSocketFloat')
                 self.ensure_input(name + '_y', 'NodeSocketFloat')
-            elif size >= 3:
+            else:
                 self.ensure_input(name, 'NodeSocketColor')
-                if param['type'] == 3:
+                if parameter_type == 3:
                     self.ensure_input(name + '_alpha', 'NodeSocketFloat')
 
-        for texture in material['textures']:
+        for texture in self.material['textures']:
             name = texture['map']
             socket_type = 'NodeSocketVector' if 'normal' in name.lower() else 'NodeSocketColor'
             self.ensure_input(name, socket_type)
-            self.param_map.setdefault(name, (name, 'texture'))
+            self.ensure_input(name + '_alpha', 'NodeSocketFloat')
+            uv_channel = infer_uv_channel(self.name, name)
+            if uv_channel:
+                self.param_map[name] = (name, 'texture', uv_channel)
+            else:
+                self.param_map[name] = (name, 'texture')
 
     def ensure_input(self, name, socket_type):
         if self.group_inputs.outputs.get(name) is None:
             new_socket(self.shader_tree, name, 'INPUT', socket_type)
 
-    def get_or_split(self, comp):
-        tex_comp = self.multi_tex[comp]
-        if len(tex_comp) == 1:
-            return self.group_inputs.outputs[tex_comp[0]]
-        if tex_comp[0] not in self.split_map:
-            img_split = self.shader_tree.nodes.new('ShaderNodeSeparateRGB')
-            self.split_map[tex_comp[0]] = img_split
-            self.shader_tree.links.new(img_split.inputs['Image'], self.group_inputs.outputs[tex_comp[0]])
-        return self.split_map[tex_comp[0]].outputs[tex_comp[1]]
+    def input(self, name):
+        return self.group_inputs.outputs.get(name)
+
+    def build_preview(self):
+        bsdf = self.shader_tree.nodes.new('ShaderNodeBsdfPrincipled')
+        bsdf.location[0] = 250
+        self.shader_tree.links.new(self.group_outputs.inputs['Surface'], bsdf.outputs['BSDF'])
+
+        normal = self.input('normal') or self.input('damage_normal')
+        if normal is not None:
+            self.shader_tree.links.new(bsdf.inputs['Normal'], normal)
+
+        metallic = self.input('metallic')
+        if metallic is not None:
+            self.shader_tree.links.new(bsdf.inputs['Metallic'], metallic)
+
+        roughness = self.input('roughness')
+        if roughness is not None:
+            self.shader_tree.links.new(bsdf.inputs['Roughness'], roughness)
+
+        color = self.build_base_color()
+        if color is not None:
+            self.shader_tree.links.new(bsdf.inputs['Base Color'], color)
+
+        alpha = self.build_alpha()
+        if alpha is not None:
+            self.shader_tree.links.new(bsdf.inputs['Alpha'], alpha)
+            self.has_alpha = True
+
+        emission = self.build_emission()
+        if emission is not None:
+            emission_input = 'Emission' if IS_BPY_V3 else 'Emission Color'
+            self.shader_tree.links.new(bsdf.inputs[emission_input], emission)
+
+        specular = self.component('reflect') or self.component('specint')
+        if specular is not None:
+            specular_input = 'Specular' if IS_BPY_V3 else 'Specular IOR Level'
+            self.shader_tree.links.new(bsdf.inputs[specular_input], specular)
+
+    def build_base_color(self):
+        diffuse = self.input('diffuse')
+        albedo = self.input('albedo')
+        color = self.multiply_color(diffuse, albedo)
+
+        change0 = self.input('change_color0')
+        change1 = self.input('change_color1')
+        mask0 = self.component('cm0')
+        mask1 = self.component('cm1')
+        change_color = None
+        if change1 is not None and mask1 is not None:
+            change_color = self.mix_color(None, change1, mask1)
+        if change0 is not None and mask0 is not None:
+            change_color = self.mix_color(change_color, change0, mask0)
+        if change_color is not None:
+            color = self.multiply_color(color, change_color)
+
+        damage_color = self.input('damage_diffuse') or self.input('damage_albedo')
+        damage_mask = self.input('damage_dist')
+        if damage_color is not None and damage_mask is not None:
+            color = self.mix_color(color, damage_color, damage_mask)
+
+        return color
+
+    def build_alpha(self):
+        alpha = self.input('alpha')
+        diffuse = self.parameters.get('diffuse')
+        if diffuse is not None and diffuse['type'] == 3:
+            alpha = self.multiply_value(alpha, self.input('diffuse_alpha'))
+
+        uses_transparency = (
+            self.material.get('render_layer') == 2
+            or self.name.lower().endswith(('_alpha', '_hair', '_clip'))
+            or alpha is not None
+        )
+        if uses_transparency and 'albedo' in self.textures:
+            alpha = self.multiply_value(alpha, self.input('albedo_alpha'))
+
+        if alpha is not None and self.has_inputs(
+            'translucent_fall_off_scale',
+            'translucent_fall_off_offset',
+        ):
+            alpha = self.multiply_value(alpha, self.gen_edge_chain('translucent_'))
+        return alpha
+
+    def build_emission(self):
+        light_color = self.input('light_color')
+        light_mask = self.component('lightmask')
+        if light_color is not None:
+            emission = self.multiply_color(light_color, light_mask)
+        else:
+            emission = None
+
+        for index in range(4):
+            color = self.input(f'light{index}_color')
+            texture = (
+                self.input(f'light{index}_scroll')
+                or self.input(f'light{index}_tex')
+            )
+            contribution = self.multiply_color(color, texture)
+            emission = self.add_color(emission, contribution)
+
+        if emission is not None and self.has_inputs(
+            'light_fall_off_scale',
+            'light_fall_off_offset',
+        ):
+            emission = self.multiply_color(emission, self.gen_edge_chain('light_'))
+        return emission
+
+    def map_packed_textures(self):
+        for texture in self.material['textures']:
+            name = texture['map']
+            if name == 'param_light_mask':
+                self.packed_components['lightmask'] = (name, 'R')
+                continue
+            if not name.startswith('param_'):
+                continue
+            components = name[6:].split('_')
+            for index, component in enumerate(components[:4]):
+                if component == 'XXX':
+                    continue
+                channel = ('R', 'G', 'B', 'A')[index]
+                self.packed_components[component] = (name, channel)
+
+    def component(self, name):
+        mapping = self.packed_components.get(name)
+        if mapping is None:
+            return None
+        texture_name, channel = mapping
+        if channel == 'A':
+            return self.input(texture_name + '_alpha')
+        if texture_name not in self.split_map:
+            split = self.shader_tree.nodes.new('ShaderNodeSeparateRGB')
+            self.shader_tree.links.new(split.inputs['Image'], self.input(texture_name))
+            self.split_map[texture_name] = split
+        return self.split_map[texture_name].outputs[channel]
+
+    def multiply_color(self, first, second):
+        if first is None:
+            return second
+        if second is None:
+            return first
+        node = self.shader_tree.nodes.new('ShaderNodeMixRGB')
+        node.blend_type = 'MULTIPLY'
+        node.inputs['Fac'].default_value = 1.0
+        self.shader_tree.links.new(node.inputs['Color1'], first)
+        self.shader_tree.links.new(node.inputs['Color2'], second)
+        return node.outputs['Color']
+
+    def add_color(self, first, second):
+        if first is None:
+            return second
+        if second is None:
+            return first
+        node = self.shader_tree.nodes.new('ShaderNodeMixRGB')
+        node.blend_type = 'ADD'
+        node.inputs['Fac'].default_value = 1.0
+        self.shader_tree.links.new(node.inputs['Color1'], first)
+        self.shader_tree.links.new(node.inputs['Color2'], second)
+        return node.outputs['Color']
+
+    def mix_color(self, first, second, factor):
+        node = self.shader_tree.nodes.new('ShaderNodeMixRGB')
+        node.inputs['Color1'].default_value = (1.0, 1.0, 1.0, 1.0)
+        if first is not None:
+            self.shader_tree.links.new(node.inputs['Color1'], first)
+        self.shader_tree.links.new(node.inputs['Color2'], second)
+        self.shader_tree.links.new(node.inputs['Fac'], factor)
+        return node.outputs['Color']
+
+    def multiply_value(self, first, second):
+        if first is None:
+            return second
+        if second is None:
+            return first
+        node = self.shader_tree.nodes.new('ShaderNodeMath')
+        node.operation = 'MULTIPLY'
+        self.shader_tree.links.new(node.inputs[0], first)
+        self.shader_tree.links.new(node.inputs[1], second)
+        return node.outputs['Value']
+
+    def has_inputs(self, *names):
+        return all(self.input(name) is not None for name in names)
 
     def gen_edge_chain(self, prefix):
         if self.facing is None:
             layer_weight = self.shader_tree.nodes.new('ShaderNodeLayerWeight')
             layer_weight.inputs['Blend'].default_value = 0.05
-            if self.normal is not None:
-                self.shader_tree.links.new(layer_weight.inputs['Normal'], self.normal)
+            normal = self.input('normal') or self.input('damage_normal')
+            if normal is not None:
+                self.shader_tree.links.new(layer_weight.inputs['Normal'], normal)
             self.facing = layer_weight.outputs['Facing']
 
-        scale_mul = self.shader_tree.nodes.new('ShaderNodeMath')
-        scale_mul.operation = 'MULTIPLY'
-        self.shader_tree.links.new(scale_mul.inputs[0], self.facing)
-        self.shader_tree.links.new(scale_mul.inputs[1], self.group_inputs.outputs[prefix + 'fall_off_scale'])
+        scale = self.shader_tree.nodes.new('ShaderNodeMath')
+        scale.operation = 'MULTIPLY'
+        self.shader_tree.links.new(scale.inputs[0], self.facing)
+        self.shader_tree.links.new(scale.inputs[1], self.input(prefix + 'fall_off_scale'))
 
-        offset_add = self.shader_tree.nodes.new('ShaderNodeMath')
-        offset_add.operation = 'ADD'
-        self.shader_tree.links.new(offset_add.inputs[0], scale_mul.outputs['Value'])
-        self.shader_tree.links.new(offset_add.inputs[1], self.group_inputs.outputs[prefix + 'fall_off_offset'])
-        return offset_add.outputs['Value']
+        offset = self.shader_tree.nodes.new('ShaderNodeMath')
+        offset.operation = 'ADD'
+        self.shader_tree.links.new(offset.inputs[0], scale.outputs['Value'])
+        self.shader_tree.links.new(offset.inputs[1], self.input(prefix + 'fall_off_offset'))
+        return offset.outputs['Value']
+
 
 def get_shader(shader_name, option_ignore_errors, material=None):
-    global ignore_errors;
-    ignore_errors = option_ignore_errors
-    if shader_name in shader_cache:
-        shader = shader_cache[shader_name]
-        # How to properly check if the node group is still valid?
-        if not str(shader.shader_tree).endswith(' invalid>'):
-            if material is not None:
-                shader.ensure_material_schema(material)
-            return shader
+    del option_ignore_errors  # Unknown shaders are safe now; all schemas come from MDB.
+    cache_key = (shader_name, material_signature(material))
+    shader = shader_cache.get(cache_key)
+    if shader is not None and not str(shader.shader_tree).endswith(' invalid>'):
+        return shader
     shader = Shader(shader_name, material)
-    shader_cache[shader_name] = shader
+    shader_cache[cache_key] = shader
     return shader

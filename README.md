@@ -57,6 +57,10 @@ For lossless round trips:
 
 Each imported material includes an `MDB Editing Notes` frame in the Shader Editor containing a short version of these rules.
 
+Shader previews are built from the capabilities present in each MDB material rather than from a shader-name lookup. Recognized parameter and slot names drive base colour, normals, transparency, packed texture channels, colour masks, damage overlays, emission, and facing-angle falloff. New shader names therefore receive the same treatment automatically when they use known material fields.
+
+MDB does not store which UV set a shader samples. Numbered texture-slot names are handled automatically, while a small exception list preserves known UV selections for shaders whose slot names do not carry enough information. The retired shader table remains in the source tree only as a test oracle and is not imported by production code.
+
 Model animations and hitboxes are not stored in the model file, these have to be edited externally.
 
 The game interally heavily relies on specific naming structures we have not defined yet. So renaming or removing of Bones, Materials and Objects is highly discouraged. Doing this anyway might result in incorrect dismemberment mechanics, crashes during gameplay, broken animations, missing hitboxes, etc.

@@ -60,6 +60,7 @@ def main():
             if parameter["type"] == 3:
                 assert shader_node.inputs.get(name + "_alpha") is not None
 
+        parameter_names = {parameter["name"] for parameter in parameters}
         texture_nodes = [
             node for node in material.node_tree.nodes
             if node.type == "TEX_IMAGE" and "mdb_texture_binding" in node
@@ -67,6 +68,20 @@ def main():
         assert len(texture_nodes) == len({
             node["mdb_texture_binding"] for node in texture_nodes
         })
+        texture_slots = {node["mdb_texture_slot"] for node in texture_nodes}
+
+        preview = shader_node.node_tree
+        bsdf = next(node for node in preview.nodes if node.type == "BSDF_PRINCIPLED")
+        if {"diffuse", "albedo"} & (parameter_names | texture_slots):
+            assert bsdf.inputs["Base Color"].is_linked
+        if {"normal", "damage_normal"} & texture_slots:
+            assert bsdf.inputs["Normal"].is_linked
+        if (
+            material["render_layer"] == 2
+            and "albedo" in texture_slots
+        ):
+            assert bsdf.inputs["Alpha"].is_linked
+
         editing_notes = [
             node for node in material.node_tree.nodes
             if node.type == "FRAME" and node.name == "MDB Editing Notes"
