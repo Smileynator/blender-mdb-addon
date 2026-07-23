@@ -3,6 +3,7 @@
 
 import bpy
 import struct
+import json
 import mathutils
 import numpy as np
 
@@ -145,15 +146,42 @@ def write_bone_data(f, bones):
 
 
 def get_textures():
-    unique_textures = set()
-    # Get the textures of all materials
+    textures = []
+
+    # Imported materials retain the original table, including unused entries.
     for material in bpy.data.materials:
-        if material.use_nodes:
-            for node in material.node_tree.nodes:
-                if node.type == 'TEX_IMAGE':
-                    # Add the texture name to the set
-                    unique_textures.add(node.image.name)
-    return list(unique_textures)
+        encoded_table = material.get('mdb_texture_table')
+        if encoded_table:
+            table = json.loads(encoded_table)
+            if len(table) > len(textures):
+                textures = table
+
+    # Used binding nodes expose editable copies of their table entries.
+    for material in bpy.data.materials:
+        if not material.use_nodes:
+            continue
+        for node in material.node_tree.nodes:
+            if node.type != 'TEX_IMAGE':
+                continue
+            if 'mdb_texture_index' in node:
+                index = node['mdb_texture_index']
+                while len(textures) <= index:
+                    textures.append({'index': len(textures), 'name': '', 'filename': ''})
+                fallback = node.image.name if node.image else ''
+                textures[index] = {
+                    'index': index,
+                    'name': node.get('mdb_texture_name', fallback),
+                    'filename': node.get('mdb_texture_filename', fallback),
+                }
+            elif node.image is not None:
+                filename = node.image.name
+                if not any(texture['filename'] == filename for texture in textures):
+                    textures.append({
+                        'index': len(textures),
+                        'name': filename,
+                        'filename': filename,
+                    })
+    return textures
 
 
 # Writes all texture data, total size per texture 0x10 (16)
@@ -161,16 +189,16 @@ def write_texture_data(file, textures, utf16_strings):
     for index, texture in enumerate(textures):
         base_pos = file.tell()
         # Index
-        file.write(struct.pack('I', index))
+        file.write(struct.pack('I', texture.get('index', index)))
         # Texture name and filename offset placeholders
         utf16_strings.append({
-            'string': texture,
+            'string': texture['name'],
             'base_pos': base_pos,
             'write_pos': file.tell()
         })
         file.write(bytes([0x00]) * 4)
         utf16_strings.append({
-            'string': texture,
+            'string': texture['filename'],
             'base_pos': base_pos,
             'write_pos': file.tell()
         })
@@ -184,23 +212,21 @@ def get_materials(indexed_strings, textures):
     # TODO Some models without blendweights still get exported blend data
     materials = []
     valid_materials = []
-    # Filter any material that are not recognized by shader_data
+    # Explicit MDB tags are authoritative. The lookup check only keeps old .blend
+    # files made by earlier add-on versions exportable.
     for material in bpy.data.materials:
         if material.use_nodes:
-            found_shader_node = False
-            for node in material.node_tree.nodes:
-                if hasattr(node, 'inputs') and node.type == 'GROUP' and node.node_tree.name in shader_data:
-                    found_shader_node = True
-                    break
-            if found_shader_node:
+            if find_mdb_shader_node(material) is not None:
                 valid_materials.append(material)
             else:
                 print(f"Warning: Material {material.name} ignored for not having a shader node.")
 
+    valid_materials.sort(key=lambda material: material.get('mdb_material_index', 0x7fffffff))
+
     # Process the valid materials
     for index, material in enumerate(valid_materials):
         material_data = {
-            'index': index,
+            'index': material.get('mdb_material_index', index),
             'mat_name_index': indexed_strings.index(material.name),
             'blender_material': material,
             'render_priority': material['render_priority'],
@@ -209,21 +235,31 @@ def get_materials(indexed_strings, textures):
         }
         parameters = []
         texture_data = []
-        # Get all the inputs of the shader group as parameters
-        if material.use_nodes:
-            for node in material.node_tree.nodes:
-                # Filter the one group we are interested in
-                if hasattr(node, 'inputs') and node.type == 'GROUP' and node.node_tree.name in shader_data:
-                    material_data['shader_name'] = node.node_tree.name
-                    for input in node.inputs:
-                        # Skip all "extra" inputs
-                        if (not input.is_linked) or input.name.endswith('_y') or input.name.endswith('_alpha'):
-                            continue
-                        if is_texture_node(node.node_tree.name, input.name):
-                            texture_data.append(get_texture(input, textures))
-                        else:
-                            parameters.append(get_parameter(node.inputs, input))
-                    break
+        node = find_mdb_shader_node(material)
+        material_data['shader_name'] = material.get(
+            'mdb_shader_name',
+            node.get('mdb_shader_name', node.node_tree.name),
+        )
+
+        if 'mdb_parameters' in node:
+            parameters = [
+                get_preserved_parameter(node.inputs, parameter)
+                for parameter in json.loads(node['mdb_parameters'])
+            ]
+            texture_nodes = [
+                texture_node for texture_node in material.node_tree.nodes
+                if texture_node.type == 'TEX_IMAGE' and 'mdb_texture_binding' in texture_node
+            ]
+            texture_nodes.sort(key=lambda texture_node: texture_node['mdb_texture_binding'])
+            texture_data = [get_preserved_texture(texture_node) for texture_node in texture_nodes]
+        else:
+            for input in node.inputs:
+                if (not input.is_linked) or input.name.endswith('_y') or input.name.endswith('_alpha'):
+                    continue
+                if is_texture_node(node.node_tree.name, input.name):
+                    texture_data.append(get_texture(input, textures))
+                else:
+                    parameters.append(get_parameter(node.inputs, input))
         material_data['parameters'] = parameters
         material_data['parameter_count'] = len(parameters)
         material_data['parameter_offset'] = 0
@@ -232,6 +268,56 @@ def get_materials(indexed_strings, textures):
         material_data['texture_offset'] = 0
         materials.append(material_data)
     return materials
+
+
+def find_mdb_shader_node(material):
+    for node in material.node_tree.nodes:
+        if not hasattr(node, 'inputs') or node.type != 'GROUP':
+            continue
+        if 'mdb_shader_name' in node or node.node_tree.name in shader_data:
+            return node
+    return None
+
+
+def get_preserved_parameter(all_inputs, parameter):
+    values = [parameter[f'val{index}'] for index in range(6)]
+    name = parameter['name']
+    size = parameter['size']
+
+    if size == 1 and all_inputs.get(name) is not None:
+        values[0] = all_inputs[name].default_value
+    elif size == 2 and all_inputs.get(name + '_x') is not None:
+        values[0] = all_inputs[name + '_x'].default_value
+        values[1] = all_inputs[name + '_y'].default_value
+    elif size >= 3 and all_inputs.get(name) is not None:
+        color = all_inputs[name].default_value
+        values[0:3] = color[0:3]
+        alpha = all_inputs.get(name + '_alpha')
+        if parameter['type'] == 3 and alpha is not None:
+            values[3] = alpha.default_value
+
+    return {
+        'name': name,
+        'values': values,
+        'type': parameter['type'],
+        'size': size,
+    }
+
+
+def get_preserved_texture(image_node):
+    return {
+        'texture_index': image_node['mdb_texture_index'],
+        'type': image_node['mdb_texture_slot'],
+        'sampler_flags': image_node.get('mdb_sampler_flags', 0),
+        'filter': image_node.get('mdb_filter', 0),
+        'address_u': image_node.get('mdb_address_u', 0),
+        'address_v': image_node.get('mdb_address_v', 0),
+        'address_w': image_node.get('mdb_address_w', 0),
+        'max_anisotropy': image_node.get('mdb_max_anisotropy', 0),
+        'min_lod': image_node.get('mdb_min_lod', 0.0),
+        'max_lod': image_node.get('mdb_max_lod', 0.0),
+        'lod_bias': image_node.get('mdb_lod_bias', 0.0),
+    }
 
 
 # Return true of this is a texture type parameter, hope there are no name clashes
@@ -263,7 +349,7 @@ def get_parameter(all_inputs, input):
         alpha_input = all_inputs.get(input.name+'_alpha', None)
         if alpha_input is not None:
             type = 3  #RGBA type
-            values.append(input.default_value[3])
+            values.append(alpha_input.default_value)
         parameter_data = {
             'name': input.name,
             'values': values,
@@ -288,9 +374,20 @@ def get_parameter(all_inputs, input):
 def get_texture(input, textures):
     image_node = find_parent_texture_node(input)
     texture_data = {
-        'texture_index': textures.index(image_node.image.name),
+        'texture_index': next(
+            index for index, texture in enumerate(textures)
+            if texture['filename'] == image_node.image.name
+        ),
         'type': input.name,
-        # TODO a lot of unknown data to be filled here
+        'sampler_flags': 0,
+        'filter': 0,
+        'address_u': 0,
+        'address_v': 0,
+        'address_w': 0,
+        'max_anisotropy': 0,
+        'min_lod': 0.0,
+        'max_lod': 0.0,
+        'lod_bias': 0.0,
     }
     return texture_data
 
@@ -312,7 +409,10 @@ def write_material_data(file, materials, ascii_strings, utf16_strings):
     for material in materials:
         material['base_pos'] = file.tell()
         file.write(struct.pack('H', material['index']))
-        file.write(struct.pack('B', material['render_priority']))
+        render_priority = material['render_priority']
+        if render_priority > 127:
+            render_priority -= 256  # Compatibility with older unsigned imports.
+        file.write(struct.pack('b', render_priority))
         file.write(struct.pack('B', material['render_layer']))
         file.write(struct.pack('I', material['mat_name_index']))
         utf16_strings.append({
@@ -360,7 +460,18 @@ def write_material_data(file, materials, ascii_strings, utf16_strings):
                 'write_pos': file.tell()
             })
             file.write(struct.pack('i', 0))
-            file.write(bytes([0x00]) * 20)  # Unknown values
+            file.write(struct.pack(
+                '<HhBBBbfff',
+                texture['sampler_flags'],
+                texture['filter'],
+                texture['address_u'],
+                texture['address_v'],
+                texture['address_w'],
+                texture['max_anisotropy'],
+                texture['min_lod'],
+                texture['max_lod'],
+                texture['lod_bias'],
+            ))
 
 # Seeks to the target, writes a file offset relative to the given base, returns to original position
 def rewrite_offset(file, rewrite_target, current_position, target_base_offset):

@@ -22,7 +22,7 @@ def new_socket(node_tree, name, in_out, socket_type):
         node_tree.interface.new_socket(name, description='', in_out=in_out, socket_type=socket_type)
 
 class Shader:
-    def __init__(self, shader):
+    def __init__(self, shader, material=None):
         shader_tree = bpy.data.node_groups.new(shader, 'ShaderNodeTree')
         group_inputs = shader_tree.nodes.new('NodeGroupInput')
         group_inputs.location[0] = -200
@@ -216,15 +216,43 @@ class Shader:
                 specular_input = 'Specular' if IS_BPY_V3 else 'Specular IOR Level'
                 shader_tree.links.new(bsdf.inputs[specular_input], self.get_or_split('reflect'))
             # TODO: How to handle specular?
-        elif ignore_errors:
-            print('Warning: MDB uses unknown shader ' + shader)
         else:
-            raise Exception('MDB uses unknown shader ' + shader + 
-                            ' processing halted because resulting import would fail to export.')
+            print('Warning: MDB uses unknown shader ' + shader + '; creating a generic editable preview.')
+            bsdf = shader_tree.nodes.new('ShaderNodeBsdfPrincipled')
+            bsdf.location[0] = 200
+            shader_tree.links.new(group_outputs.inputs['Surface'], bsdf.outputs['BSDF'])
+
+        if material is not None:
+            self.ensure_material_schema(material)
 
         # Deselect all nodes
         for node in shader_tree.nodes:
             node.select = False
+
+    def ensure_material_schema(self, material):
+        """Expose every parameter and texture slot present in the MDB material."""
+        for param in material['params']:
+            name = param['name']
+            size = param['size']
+            if size == 1:
+                self.ensure_input(name, 'NodeSocketFloat')
+            elif size == 2:
+                self.ensure_input(name + '_x', 'NodeSocketFloat')
+                self.ensure_input(name + '_y', 'NodeSocketFloat')
+            elif size >= 3:
+                self.ensure_input(name, 'NodeSocketColor')
+                if param['type'] == 3:
+                    self.ensure_input(name + '_alpha', 'NodeSocketFloat')
+
+        for texture in material['textures']:
+            name = texture['map']
+            socket_type = 'NodeSocketVector' if 'normal' in name.lower() else 'NodeSocketColor'
+            self.ensure_input(name, socket_type)
+            self.param_map.setdefault(name, (name, 'texture'))
+
+    def ensure_input(self, name, socket_type):
+        if self.group_inputs.outputs.get(name) is None:
+            new_socket(self.shader_tree, name, 'INPUT', socket_type)
 
     def get_or_split(self, comp):
         tex_comp = self.multi_tex[comp]
@@ -255,14 +283,16 @@ class Shader:
         self.shader_tree.links.new(offset_add.inputs[1], self.group_inputs.outputs[prefix + 'fall_off_offset'])
         return offset_add.outputs['Value']
 
-def get_shader(shader_name, option_ignore_errors):
+def get_shader(shader_name, option_ignore_errors, material=None):
     global ignore_errors;
     ignore_errors = option_ignore_errors
     if shader_name in shader_cache:
         shader = shader_cache[shader_name]
         # How to properly check if the node group is still valid?
         if not str(shader.shader_tree).endswith(' invalid>'):
+            if material is not None:
+                shader.ensure_material_schema(material)
             return shader
-    shader = Shader(shader_name)
+    shader = Shader(shader_name, material)
     shader_cache[shader_name] = shader
     return shader

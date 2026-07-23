@@ -1,6 +1,7 @@
 # MDB loader for Blender
 
 import os
+import json
 import bpy
 import mathutils
 import numpy as np
@@ -19,6 +20,14 @@ bone_up_Y = mathutils.Matrix(((1.0, 0.0, 0.0, 0.0),
 # Read helper functions
 def read_ushort(file):
     return unpack('<H', file.read(2))[0]
+
+
+def read_short(file):
+    return unpack('<h', file.read(2))[0]
+
+
+def read_byte(file):
+    return unpack('<b', file.read(1))[0]
 
 
 def read_int(file):
@@ -178,9 +187,15 @@ def parse_mat_txr(f, count, offset):
         base = f.tell()
         mat_txr['texture'] = read_uint(f)
         type_name_offset = read_uint(f)
-        mat_txr['unk0'] = read_uint(f)  # 0, but 4 for hornet in EDF5?
-        f.read(12)  # Always zero, 3 values
-        mat_txr['unk1'] = read_int(f)  # 0, but -1 for hornet in EDF5?
+        mat_txr['sampler_flags'] = read_ushort(f)
+        mat_txr['filter'] = read_short(f)
+        mat_txr['address_u'] = f.read(1)[0]
+        mat_txr['address_v'] = f.read(1)[0]
+        mat_txr['address_w'] = f.read(1)[0]
+        mat_txr['max_anisotropy'] = read_byte(f)
+        mat_txr['min_lod'] = read_float(f)
+        mat_txr['max_lod'] = read_float(f)
+        mat_txr['lod_bias'] = read_float(f)
 
         next = f.tell()
         assert next - base == 28
@@ -200,7 +215,7 @@ def parse_materials(f, count, offset, name_table):
         material = {}
         base = f.tell()
         material['index'] = read_ushort(f)
-        material['render_priority'] = f.read(1)[0]
+        material['render_priority'] = read_byte(f)
         material['render_layer'] = f.read(1)[0]
         material_name = read_uint(f)
         shader = read_uint(f)
@@ -507,7 +522,7 @@ def load(operator, context, filepath='', **kwargs):
                 break
         unhandled = 0
 
-        shader = get_shader(mdb_material['shader'], ignore_errors)
+        shader = get_shader(mdb_material['shader'], ignore_errors, mdb_material)
         if shader.has_alpha and material.blend_method == 'OPAQUE':
             material.blend_method = 'HASHED'
 
@@ -518,6 +533,11 @@ def load(operator, context, filepath='', **kwargs):
                 break
         shader_node = material.node_tree.nodes.new('ShaderNodeGroup')
         shader_node.node_tree = shader.shader_tree
+        shader_node['mdb_shader_name'] = mdb_material['shader']
+        shader_node['mdb_parameters'] = json.dumps(mdb_material['params'])
+        material['mdb_shader_name'] = mdb_material['shader']
+        material['mdb_material_index'] = mdb_material['index']
+        material['mdb_texture_table'] = json.dumps(mdb['textures'])
         shader_node.show_options = False
         shader_node.width = 240
         shader_node.location[1] = mat_out.location[1]
@@ -545,10 +565,27 @@ def load(operator, context, filepath='', **kwargs):
                         input_alpha.default_value = param['val3']
 
         # Add all material textures
-        for texture in mdb_material['textures']:
+        for texture_binding_index, texture in enumerate(mdb_material['textures']):
             txr_map = texture['map']
             texImage = mat_nodes.nodes.new('ShaderNodeTexImage')
-            filename = mdb['textures'][texture['texture']]['filename']
+            texture_record = mdb['textures'][texture['texture']]
+            filename = texture_record['filename']
+            texImage.name = f"MDB Texture {texture_binding_index}: {txr_map}"
+            texImage.label = f"{txr_map}: {filename}"
+            texImage['mdb_texture_binding'] = texture_binding_index
+            texImage['mdb_texture_index'] = texture['texture']
+            texImage['mdb_texture_name'] = texture_record['name']
+            texImage['mdb_texture_filename'] = filename
+            texImage['mdb_texture_slot'] = txr_map
+            texImage['mdb_sampler_flags'] = texture['sampler_flags']
+            texImage['mdb_filter'] = texture['filter']
+            texImage['mdb_address_u'] = texture['address_u']
+            texImage['mdb_address_v'] = texture['address_v']
+            texImage['mdb_address_w'] = texture['address_w']
+            texImage['mdb_max_anisotropy'] = texture['max_anisotropy']
+            texImage['mdb_min_lod'] = texture['min_lod']
+            texImage['mdb_max_lod'] = texture['max_lod']
+            texImage['mdb_lod_bias'] = texture['lod_bias']
             if filename in textures:
                 texImage.image = textures[filename]
             else:
@@ -596,8 +633,8 @@ def load(operator, context, filepath='', **kwargs):
                     mat_nodes.links.new(input_col, texImage.outputs['Color'])
                     if input_alpha is not None:
                         mat_nodes.links.new(input_alpha, texImage.outputs['Alpha'])
-                param = shader.param_map[txr_map]
-                if len(param) >= 3:
+                param = shader.param_map.get(txr_map)
+                if param is not None and len(param) >= 3:
                     uvmap = mat_nodes.nodes.new('ShaderNodeUVMap')
                     uvmap.location[0] = texImage.location[0] - 200
                     uvmap.location[1] = texImage.location[1] - 200
