@@ -65,9 +65,17 @@ def main():
                 uv_count += 1
         schema_count += 1
 
+    edf6_uv_observations = {
+        ("snd_Chara_VirtualDome", "albedo2"): 1,
+        ("snd_e616_Venus_Shield", "light1_tex"): 1,
+    }
+    for (shader_name, slot_name), uv_channel in edf6_uv_observations.items():
+        assert infer_uv_channel(shader_name, slot_name) == uv_channel
+
     print(
         f"Generic builder covered all {schema_count} retired shader recipes "
-        f"and preserved {uv_count} known non-default UV selections."
+        f"and preserved {uv_count + len(edf6_uv_observations)} "
+        "known non-default UV selections."
     )
 
 

@@ -178,6 +178,21 @@ class MaterialRoundTripTests(unittest.TestCase):
 
         self.assertEqual(float_bits(exported["values"][:4]), float_bits([0.1, 0.2, 0.3, 0.4]))
 
+    def test_legacy_vector_parameter_keeps_names_ending_in_x(self):
+        inputs = {
+            "index_x": types.SimpleNamespace(
+                name="index_x",
+                default_value=0.25,
+                type="VALUE",
+            ),
+            "index_y": types.SimpleNamespace(default_value=0.75),
+        }
+
+        exported = EXPORT_MDB.get_parameter(inputs, inputs["index_x"])
+
+        self.assertEqual(exported["name"], "index")
+        self.assertEqual(exported["values"][:2], [0.25, 0.75])
+
     def assert_materials_equal(self, expected_materials, actual_materials):
         self.assertEqual(len(expected_materials), len(actual_materials))
         for expected, actual in zip(expected_materials, actual_materials):

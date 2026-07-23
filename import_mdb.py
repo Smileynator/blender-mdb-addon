@@ -541,6 +541,7 @@ def load(operator, context, filepath='', **kwargs):
         material['render_priority'] = mdb_material['render_priority']
         material['render_layer'] = mdb_material['render_layer']
         material['render_type'] = mdb_material['render_type']
+        material['mdb_name'] = mdb_material['name']
         
         if lshader.endswith('_alpha') or lshader.endswith('_hair'):
             material.blend_method = 'HASHED'
@@ -683,7 +684,7 @@ def load(operator, context, filepath='', **kwargs):
 
     # Add armature and bones
     armature = bpy.data.armatures.new('Armature')
-    armature_obj = bpy.data.objects.new(os.path.splitext(os.path.basename(filename))[0], armature)
+    armature_obj = bpy.data.objects.new(os.path.splitext(os.path.basename(filepath))[0], armature)
     context.scene.collection.objects.link(armature_obj)
     context.view_layer.objects.active = armature_obj
     bpy.ops.object.mode_set(mode='EDIT', toggle=False)
@@ -715,6 +716,7 @@ def load(operator, context, filepath='', **kwargs):
     for object in mdb['objects']:
         name = object['name']
         empty = bpy.data.objects.new(name, None)
+        empty['mdb_name'] = name
         context.scene.collection.objects.link(empty)
         for mdb_mesh in object['meshes']:
             vertices = mdb_mesh['vertices']

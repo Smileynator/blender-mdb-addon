@@ -113,6 +113,12 @@ def main():
         version=export_version,
     )
     assert output_path.exists()
+    with output_path.open("rb") as exported:
+        reparsed = import_mdb.parse_mdb(exported)
+    for bone in reparsed["bones"]:
+        if bone["group"] != 0:
+            assert math.isclose(bone["unk6"], 1.0)
+            assert math.isclose(bone["unk10"], 1.0)
 
 
 if __name__ == "__main__":

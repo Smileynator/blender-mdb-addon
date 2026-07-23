@@ -49,6 +49,8 @@ UV_EXCEPTIONS = {
     ('snd_e505_Flare', 'mask0'): 1,
     ('snd_e505_Flare', 'albedo1'): 2,
     ('snd_e505_Flare', 'mask1'): 3,
+    ('snd_Chara_VirtualDome', 'albedo2'): 1,
+    ('snd_e616_Venus_Shield', 'light1_tex'): 1,
 }
 
 shader_cache = {}

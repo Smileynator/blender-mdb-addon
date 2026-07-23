@@ -2,10 +2,11 @@
 # Author: Smileynator
 
 import bpy
-import struct
 import json
 import mathutils
 import numpy as np
+import os
+import struct
 
 gameVersion = 0
 # Original model is Y UP, but blender is Z UP by default, we convert that here.
@@ -57,19 +58,51 @@ def get_unique_names():
             names_set.add(bone.name)
             names_list.append(bone.name)
 
-    # Get all object names
-    for object in bpy.data.objects:
-        if object.data is None:
-            if object.name not in names_set:
-                names_set.add(object.name)
-                names_list.append(object.name)
+    # Only model-container empties belong in the MDB name table. Armatures,
+    # cameras, lights, and unrelated scene helpers must not leak into it.
+    for obj in iter_mdb_containers():
+        name = obj.get('mdb_name', obj.name)
+        if name not in names_set:
+            names_set.add(name)
+            names_list.append(name)
 
-    # Get all material names
+    # Only materials that will actually be exported belong in the table.
     for material in bpy.data.materials:
-        if material.name not in names_set:
-            names_set.add(material.name)
-            names_list.append(material.name)
+        if material.use_nodes and find_mdb_shader_node(material) is not None:
+            name = material.get('mdb_name', material.name)
+            if name not in names_set:
+                names_set.add(name)
+                names_list.append(name)
     return names_list
+
+
+def iter_mdb_containers():
+    for obj in bpy.data.objects:
+        if obj.data is None and any(child.type == 'MESH' for child in obj.children):
+            yield obj
+
+
+def iter_exported_mesh_objects():
+    for container in iter_mdb_containers():
+        for child in container.children:
+            if child.type == 'MESH':
+                yield child
+
+
+def find_non_triangulated_meshes():
+    return [
+        mesh_object.name
+        for mesh_object in iter_exported_mesh_objects()
+        if any(polygon.loop_total != 3 for polygon in mesh_object.data.polygons)
+    ]
+
+
+def find_overweight_vertices():
+    for mesh_object in iter_exported_mesh_objects():
+        for vertex in mesh_object.data.vertices:
+            if sum(group.weight > 0.0 for group in vertex.groups) > 4:
+                return True
+    return False
 
 
 def get_bone_data(names):
@@ -111,6 +144,10 @@ def get_bone_data(names):
         # Inverse bind matrix
         inv_matrix = bone.matrix_local.inverted() @ bone_up_Y
         bone_data['inverse_bind_matrix'] = [element for col in inv_matrix.col for element in col]
+        bone_data['inv_matrix'] = inv_matrix
+        bone_data['world_bind_translation'] = (
+            bone_up_Y.inverted() @ bone.matrix_local
+        ).translation.copy()
         # Get unknown values
         bone_data['group'] = bone['group']
         bone_data['unk1'] = bone['unknown_ints'][0]
@@ -168,7 +205,10 @@ def get_textures():
                 fallback = node.image.name if node.image else ''
                 textures[index] = {
                     'index': index,
-                    'name': node.get('mdb_texture_name', fallback),
+                    'name': node.get(
+                        'mdb_texture_name',
+                        os.path.splitext(fallback)[0],
+                    ),
                     'filename': node.get('mdb_texture_filename', fallback),
                 }
             elif node.image is not None:
@@ -176,7 +216,7 @@ def get_textures():
                 if not any(texture['filename'] == filename for texture in textures):
                     textures.append({
                         'index': len(textures),
-                        'name': filename,
+                        'name': os.path.splitext(filename)[0],
                         'filename': filename,
                     })
     return textures
@@ -225,7 +265,7 @@ def get_materials(indexed_strings, textures):
     for index, material in enumerate(valid_materials):
         material_data = {
             'index': material.get('mdb_material_index', index),
-            'mat_name_index': indexed_strings.index(material.name),
+            'mat_name_index': indexed_strings.index(material.get('mdb_name', material.name)),
             'blender_material': material,
             'render_priority': material['render_priority'],
             'render_layer': material['render_layer'],
@@ -252,10 +292,12 @@ def get_materials(indexed_strings, textures):
             texture_data = [get_preserved_texture(texture_node) for texture_node in texture_nodes]
         else:
             for input in node.inputs:
-                if (not input.is_linked) or input.name.endswith('_y') or input.name.endswith('_alpha'):
+                if input.name.endswith('_y') or input.name.endswith('_alpha'):
                     continue
                 if find_parent_texture_node(input) is not None:
-                    texture_data.append(get_texture(input, textures))
+                    texture = get_texture(input, textures)
+                    if texture is not None:
+                        texture_data.append(texture)
                 else:
                     parameters.append(get_parameter(node.inputs, input))
         material_data['parameters'] = parameters
@@ -324,9 +366,10 @@ def get_preserved_texture(image_node):
 def get_parameter(all_inputs, input):
     parameter_data = None
     if input.name.endswith('_x'):
-        y_input = all_inputs[input.name.replace('_x', '_y')]
+        parameter_name = input.name[:-2]
+        y_input = all_inputs[parameter_name + '_y']
         parameter_data = {
-            'name': input.name.rstrip('_x'),
+            'name': parameter_name,
             'values': [input.default_value, y_input.default_value],
             'type': 1,  #Vector2 type
             'size': 2
@@ -342,7 +385,7 @@ def get_parameter(all_inputs, input):
             'name': input.name,
             'values': values,
             'type': type,
-            'size': 4
+            'size': len(values),
         }
     elif input.type == 'VALUE':
         parameter_data = {
@@ -361,10 +404,19 @@ def get_parameter(all_inputs, input):
 # Gets the texture relevant data for this node input
 def get_texture(input, textures):
     image_node = find_parent_texture_node(input)
+    if image_node is None:
+        print(f"Warning: Texture input '{input.name}' has no image node; skipping.")
+        return None
+    filename = image_node.image.name if image_node.image else image_node.get(
+        'mdb_texture_filename',
+    )
+    if not filename:
+        print(f"Warning: Texture input '{input.name}' has no usable filename; skipping.")
+        return None
     texture_data = {
         'texture_index': next(
             index for index, texture in enumerate(textures)
-            if texture['filename'] == image_node.image.name
+            if texture['filename'] == filename
         ),
         'type': input.name,
         'sampler_flags': 0,
@@ -473,13 +525,12 @@ def rewrite_offset(file, rewrite_target, current_position, target_base_offset):
 def get_objects(names, materials):
     objects = []
     obj_index = 0
-    for obj in bpy.data.objects:
-        if obj.data is not None:
-            continue
+    for obj in iter_mdb_containers():
+        object_name = obj.get('mdb_name', obj.name)
         object_data = {
             'index': obj_index,
-            'name': obj.name,
-            'name_index': names.index(obj.name),
+            'name': object_name,
+            'name_index': names.index(object_name),
         }
         # Get all meshes
         mesh_objects = [child for child in obj.children if child.type == 'MESH']
@@ -493,6 +544,32 @@ def get_objects(names, materials):
     return objects
 
 
+def split_vertices(mesh):
+    """Return one exported vertex for every distinct per-loop vertex payload."""
+    unique_vertices = {}
+    vertex_loop_pairs = []
+    indices = []
+    for loop in mesh.loops:
+        uv_key = tuple(
+            tuple(uv_layer.data[loop.index].uv)
+            for uv_layer in mesh.uv_layers
+        )
+        key = (
+            loop.vertex_index,
+            tuple(loop.normal),
+            tuple(loop.tangent),
+            loop.bitangent_sign,
+            uv_key,
+        )
+        exported_index = unique_vertices.get(key)
+        if exported_index is None:
+            exported_index = len(vertex_loop_pairs)
+            unique_vertices[key] = exported_index
+            vertex_loop_pairs.append((mesh.vertices[loop.vertex_index], loop))
+        indices.append(exported_index)
+    return vertex_loop_pairs, indices
+
+
 # Gathers mesh info data
 def get_mesh_data(index, mesh_object, materials):
     mesh = mesh_object.data
@@ -502,26 +579,29 @@ def get_mesh_data(index, mesh_object, materials):
         if mesh.materials[0] == mat['blender_material']:
             material_index = mat['index']
             break
-    # Get max bone weights to a single vertex
-    bone_weights = 0
-    for vert in mesh.vertices:
-        current_weights = 0
-        for group in vert.groups:
-            if group.weight > 0:
-                current_weights += 1
-        if current_weights > bone_weights:
-            bone_weights = current_weights
-    is_skinned = any(mod.type == 'ARMATURE' for mod in mesh_object.modifiers)
+    bone_weights = min(
+        4,
+        max(
+            (
+                sum(group.weight > 0.0 for group in vertex.groups)
+                for vertex in mesh.vertices
+            ),
+            default=0,
+        ),
+    )
+    is_skinned = bone_weights > 0
+    mesh.calc_tangents()
+    vertex_loop_pairs, indices = split_vertices(mesh)
     mesh_data = {
         'skinned_mesh': int(is_skinned),
         'bones_per_vertex': bone_weights,
         # TODO who wants to bet there is a 2nd material option at 0x08?
         'material_index': material_index,
-        'vertices_count': len(mesh.vertices),
+        'vertices_count': len(vertex_loop_pairs),
         'mesh_index': index,
-        'vertices_data': get_vertices_data(mesh, is_skinned),
-        'indices_count': len(mesh.loops),
-        'indice_data': [loop.vertex_index for loop in mesh.loops],  # get vertex index from each loop to form indices
+        'vertices_data': get_vertices_data(mesh, is_skinned, vertex_loop_pairs),
+        'indices_count': len(indices),
+        'indice_data': indices,
     }
     # Total data size per vertex?
     data_size = 0
@@ -532,18 +612,7 @@ def get_mesh_data(index, mesh_object, materials):
     return mesh_data
 
 # Gathers all the data per vertices and returns the object
-def get_vertices_data(mesh, is_skinned):
-    # Calculate tangents and binormals
-    mesh.calc_tangents() # TODO pretty sure transparent objects need another UV but not sure.
-    #mesh.calc_tangents(uvmap=mesh.uv_layers.active.name)
-    
-    vertex_loops = {}
-    for loop in mesh.loops:
-        if loop.vertex_index not in vertex_loops:
-            vertex_loops[loop.vertex_index] = {}
-            vertex_loops[loop.vertex_index]['loops'] = []
-        vertex_loops[loop.vertex_index]['loops'].append(loop)
-    
+def get_vertices_data(mesh, is_skinned, vertex_loop_pairs):
     vertices_data = []
     # Due to the nature of this data, it makes sense to just generate it as i saw in example files
     # We cannot be certain for each of these if they exist or not until proven otherwise in practice
@@ -614,12 +683,11 @@ def get_vertices_data(mesh, is_skinned):
         for data in uv_data:
             data['name'] = data['name'].upper()
     
-    # Finally we go over all the vertices and populate the data arrays in each of the above data channels
+    # Populate each exported vertex from its source vertex and face corner.
     uv_count = len(mesh.uv_layers)
-    for vert in mesh.vertices:
-        loop = vertex_loops[vert.index]['loops'][0]  # Get the first loop this vertex is part of
+    for vert, loop in vertex_loop_pairs:
         position_data['data'].append([vert.co[0], vert.co[2], -vert.co[1], 1.0])  # Correct orientation from import!
-        normal_data['data'].append([vert.normal[0], vert.normal[2], -vert.normal[1], 1.0])
+        normal_data['data'].append([loop.normal[0], loop.normal[2], -loop.normal[1], 1.0])
         binormal_data['data'].append([loop.bitangent[0], loop.bitangent[2], -loop.bitangent[1], 1.0])
         tangent_data['data'].append([loop.tangent[0], loop.tangent[2], -loop.tangent[1], 1.0])
         # UVs
@@ -628,14 +696,20 @@ def get_vertices_data(mesh, is_skinned):
             uv_data[i]['data'].append([uv_vector[0], 1.0 - uv_vector[1]])  # UV map flip Y value
         # Skinned mesh
         if is_skinned:
-            weights = []
-            indices = []
-            for bone in vert.groups:
-                if bone.weight > 0:
-                    weights.append(bone.weight)
-                    indices.append(bone.group)
-                    if len(weights) == 4:
-                        break # No need to keep looping, we got all 4 which is the maximum
+            influences = sorted(
+                (
+                    (group.weight, group.group)
+                    for group in vert.groups
+                    if group.weight > 0.0
+                ),
+                reverse=True,
+            )[:4]
+            weight_total = sum(weight for weight, _ in influences)
+            weights = [
+                weight / weight_total
+                for weight, _ in influences
+            ]
+            indices = [group_index for _, group_index in influences]
             while len(weights) < 4:
                 weights.append(0.0)
                 indices.append(0)
@@ -790,10 +864,139 @@ def sort_objects_by_name_order(array_to_sort, reference_array):
 
     return sorted_array
 
+
+def resolve_bone_name_matches(bones, objects):
+    positions_by_object_index = {}
+    for object_data in objects:
+        positions = []
+        for mesh_data in object_data['mesh_data']:
+            position_layout = next(
+                data for data in mesh_data['vertices_data']
+                if data['name'].lower() == 'position'
+            )
+            positions.extend(
+                mathutils.Vector(position[:3])
+                for position in position_layout['data']
+            )
+        positions_by_object_index[object_data['index']] = positions
+
+    objects_by_name = {}
+    for object_data in objects:
+        if object_data['name']:
+            objects_by_name.setdefault(object_data['name'], []).append(object_data)
+
+    bones_by_name = {}
+    for bone in bones:
+        if bone['group'] in (1, 2) and bone['name']:
+            bones_by_name.setdefault(bone['name'], []).append(bone)
+
+    matches = {}
+    for name, matching_bones in bones_by_name.items():
+        remaining_objects = list(objects_by_name.get(name, ()))
+        for bone in matching_bones:
+            if not remaining_objects:
+                break
+            bone_position = bone['world_bind_translation']
+            candidates = []
+            for object_data in remaining_objects:
+                vertices = positions_by_object_index[object_data['index']]
+                if not vertices:
+                    continue
+                centroid = (
+                    sum(vertices, mathutils.Vector((0.0, 0.0, 0.0)))
+                    / len(vertices)
+                )
+                candidates.append((
+                    (bone_position - centroid).length_squared,
+                    object_data,
+                ))
+            if not candidates:
+                break
+            _, closest_object = min(candidates, key=lambda candidate: candidate[0])
+            matches[bone['index']] = positions_by_object_index[closest_object['index']]
+            remaining_objects.remove(closest_object)
+    return matches
+
+
+def recompute_bone_bounding_boxes(bones, objects):
+    """Recompute the two float4 bone bounds required by the game."""
+    skinned_vertices = {}
+    for object_data in objects:
+        for mesh_data in object_data['mesh_data']:
+            if not mesh_data['skinned_mesh']:
+                continue
+            layouts = {
+                data['name'].lower(): data
+                for data in mesh_data['vertices_data']
+            }
+            for position, indices, weights in zip(
+                layouts['position']['data'],
+                layouts['blendindices']['data'],
+                layouts['blendweight']['data'],
+            ):
+                vertex = mathutils.Vector(position[:3])
+                for bone_index, weight in zip(indices, weights):
+                    if weight > 0.0:
+                        skinned_vertices.setdefault(int(bone_index), []).append(vertex)
+
+    rigid_vertices = resolve_bone_name_matches(bones, objects)
+    for bone in bones:
+        if bone['group'] == 0:
+            continue
+        if bone['group'] == 3:
+            vertices = skinned_vertices.get(bone['index'])
+        else:
+            vertices = rigid_vertices.get(bone['index'])
+
+        if not vertices:
+            bone['unknown_floats'] = [
+                0.0, 0.0, 0.0, 1.0,
+                0.0, 0.0, 0.0, 1.0,
+            ]
+            continue
+
+        local_vertices = [bone['inv_matrix'] @ vertex for vertex in vertices]
+        minimum = mathutils.Vector(tuple(
+            min(vertex[axis] for vertex in local_vertices)
+            for axis in range(3)
+        ))
+        maximum = mathutils.Vector(tuple(
+            max(vertex[axis] for vertex in local_vertices)
+            for axis in range(3)
+        ))
+        size = (maximum - minimum) * 0.5
+        offset = (maximum + minimum) * 0.5
+        bone['unknown_floats'] = [
+            size.x, size.y, size.z, 1.0,
+            offset.x, offset.y, offset.z, 1.0,
+        ]
+
+
+def report_export(operator, level, message):
+    if hasattr(operator, 'report'):
+        operator.report({level}, message)
+    print(f'{level}: {message}')
+
+
 def save(operator, context, filepath="", version=0, **kwargs):
     assert version != 0
     global gameVersion
     gameVersion = version
+    non_triangular = find_non_triangulated_meshes()
+    if non_triangular:
+        message = (
+            'MDB export requires triangulated meshes. Export cancelled for: '
+            + ', '.join(non_triangular)
+        )
+        report_export(operator, 'ERROR', message)
+        return {'CANCELLED'}
+    if find_overweight_vertices():
+        report_export(
+            operator,
+            'WARNING',
+            'Vertices with more than four bone influences will use their four '
+            'strongest influences, normalized to a total weight of 1.',
+        )
     # Get the name table
     indexed_strings = get_unique_names()
     ascii_strings = []
@@ -803,6 +1006,7 @@ def save(operator, context, filepath="", version=0, **kwargs):
     texture_names = get_textures()
     materials = get_materials(indexed_strings, texture_names)
     objects = get_objects(indexed_strings, materials)
+    recompute_bone_bounding_boxes(bones, objects)
 
     # Sort all the objects by bone name order
     objects = sort_objects_by_name_order(objects, bones)
