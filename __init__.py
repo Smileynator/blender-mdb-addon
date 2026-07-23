@@ -1,6 +1,6 @@
 bl_info = {
     "name": "Earth Defense Force Formats",
-    "author": "Smileynator / BlueAmulet",
+    "author": "Smileynator / BlueAmulet / Ktaro",
     "version": (1, 8, 0),
     "blender": (3, 6, 0),
     "location": "File > Import-Export",
