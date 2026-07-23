@@ -92,6 +92,22 @@ def parse_keyframes(f, keyframe_count, keyframe_offset):
     return keyframes
 
 
+def parse_keyframes_quat(f, keyframe_count, keyframe_offset):
+    keyframes = []
+    f.seek(keyframe_offset)
+    for i in range(keyframe_count):
+        data = {}
+        base = f.tell()
+        data['x'] = read_float(f)
+        data['y'] = read_float(f)
+        data['z'] = read_float(f)
+        data['w'] = read_float(f)
+        next = f.tell()
+        assert next - base == 0x10
+        keyframes.append(data)
+    return keyframes
+
+
 def parse_anm_point(f, anm_point_count, anm_point_offset):
     anim_points = []
     f.seek(anm_point_offset)
@@ -110,9 +126,57 @@ def parse_anm_point(f, anm_point_count, anm_point_offset):
         next = f.tell()
         assert next - base == 0x20
 
+        point['type'] = 1
         point['keyframes'] = []
         if point['keyframe']:
             point['keyframes'] = parse_keyframes(f, keyframe_count, base+keyframe_offset)
+
+        f.seek(next)
+        anim_points.append(point)
+    return anim_points
+
+
+def parse_anm_point6(f, anm_point_count, anm_point_offset):
+    """Parse EDF6's 0x30-byte animation channels."""
+    anim_points = []
+    f.seek(anm_point_offset)
+    for i in range(anm_point_count):
+        point = {}
+        base = f.tell()
+        point['base_x'] = read_float(f)
+        point['base_y'] = read_float(f)
+        point['base_z'] = read_float(f)
+        point['base_w'] = read_float(f)
+        point['speed_x'] = read_float(f)
+        point['speed_y'] = read_float(f)
+        point['speed_z'] = read_float(f)
+        point['speed_w'] = read_float(f)
+        keyframe_offset = read_int(f)
+        point['type'] = read_int(f)
+        keyframe_count = read_int(f)
+        read_int(f)
+        next = f.tell()
+        assert next - base == 0x30
+
+        point['keyframes'] = []
+        if keyframe_count > 1:
+            if point['type'] == 1:
+                point['keyframes'] = parse_keyframes(
+                    f,
+                    keyframe_count,
+                    base + keyframe_offset,
+                )
+            elif point['type'] == 3:
+                point['keyframes'] = parse_keyframes_quat(
+                    f,
+                    keyframe_count,
+                    base + keyframe_offset,
+                )
+            else:
+                print(
+                    f'Warning: CANM6 channel {i} has unexpected type '
+                    f'{point["type"]} with {keyframe_count} keyframes.'
+                )
 
         f.seek(next)
         anim_points.append(point)
@@ -151,14 +215,28 @@ def parse_canm(f):
     if override_version != 0:
         file_version = override_version
     else:
-        assert file_version == 512
-
+        assert file_version in (512, 768)
 
     canm['animations'] = parse_anm_data(f, anm_data_count, anm_data_offset)
-    canm['anm_points'] = parse_anm_point(f, anm_point_count, anm_point_offset)
+    if file_version == 768:
+        canm['anm_points'] = parse_anm_point6(
+            f,
+            anm_point_count,
+            anm_point_offset,
+        )
+    else:
+        canm['anm_points'] = parse_anm_point(
+            f,
+            anm_point_count,
+            anm_point_offset,
+        )
     canm['bone_names'] = parse_bone_names(f, anm_bone_count, anm_bone_offset)
 
     return canm
+
+
+def quaternion_rotation_matrix(x, y, z, w):
+    return mathutils.Quaternion((w, x, y, z)).to_matrix().to_4x4()
 
 
 def get_bone_matrix_of_frame(canm, bone_anim, i):
@@ -189,10 +267,18 @@ def get_bone_matrix_of_frame(canm, bone_anim, i):
             set_pos = True
         # Rotation
         if rot_anim:
-            x = mathutils.Matrix.Rotation(rot_anim['base_x'], 4, 'X')
-            y = mathutils.Matrix.Rotation(rot_anim['base_y'], 4, 'Y')
-            z = mathutils.Matrix.Rotation(rot_anim['base_z'], 4, 'Z')
-            rot_mat = z @ y @ x
+            if rot_anim['type'] in (2, 3):
+                rot_mat = quaternion_rotation_matrix(
+                    rot_anim['base_x'],
+                    rot_anim['base_y'],
+                    rot_anim['base_z'],
+                    rot_anim['base_w'],
+                )
+            else:
+                x = mathutils.Matrix.Rotation(rot_anim['base_x'], 4, 'X')
+                y = mathutils.Matrix.Rotation(rot_anim['base_y'], 4, 'Y')
+                z = mathutils.Matrix.Rotation(rot_anim['base_z'], 4, 'Z')
+                rot_mat = z @ y @ x
             set_rot = True
         # Scale (untested!)
         if scale_anim:
@@ -211,10 +297,19 @@ def get_bone_matrix_of_frame(canm, bone_anim, i):
         set_pos = True
     # Rotation
     if rot_anim and len(rot_anim['keyframes']) > i:
-        x = mathutils.Matrix.Rotation(rot_anim['base_x'] + rot_anim['keyframes'][i]['x'] * rot_anim['speed_x'], 4, 'X')
-        y = mathutils.Matrix.Rotation(rot_anim['base_y'] + rot_anim['keyframes'][i]['y'] * rot_anim['speed_y'], 4, 'Y')
-        z = mathutils.Matrix.Rotation(rot_anim['base_z'] + rot_anim['keyframes'][i]['z'] * rot_anim['speed_z'], 4, 'Z')
-        rot_mat = z @ y @ x
+        if rot_anim['type'] in (2, 3):
+            keyframe = rot_anim['keyframes'][i]
+            rot_mat = quaternion_rotation_matrix(
+                keyframe['x'],
+                keyframe['y'],
+                keyframe['z'],
+                keyframe['w'],
+            )
+        else:
+            x = mathutils.Matrix.Rotation(rot_anim['base_x'] + rot_anim['keyframes'][i]['x'] * rot_anim['speed_x'], 4, 'X')
+            y = mathutils.Matrix.Rotation(rot_anim['base_y'] + rot_anim['keyframes'][i]['y'] * rot_anim['speed_y'], 4, 'Y')
+            z = mathutils.Matrix.Rotation(rot_anim['base_z'] + rot_anim['keyframes'][i]['z'] * rot_anim['speed_z'], 4, 'Z')
+            rot_mat = z @ y @ x
         set_rot = True
     # Scale (untested!)
     if scale_anim and len(scale_anim['keyframes']) > i:

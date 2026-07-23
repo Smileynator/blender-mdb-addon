@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Earth Defense Force Formats",
     "author": "Smileynator / BlueAmulet",
-    "version": (1, 7, 1),
+    "version": (1, 8, 0),
     "blender": (3, 6, 0),
     "location": "File > Import-Export",
     "description": "Import-Export MDB, CANM, mesh, UV's, materials, textures, Animations from Earth Defense Force",
@@ -138,7 +138,7 @@ class ImportCANM(bpy.types.Operator, ImportHelper):
 
     option_override_version: IntProperty(
         name="Override Version Int",
-        description="Ignores the file version Int, instead uses this if non 0. 512 == EDF5, ??? == EDF6",
+        description="Ignores the file version Int, instead uses this if non 0. 512 == EDF5, 768 == EDF6",
         default=0,
     )
 
@@ -178,6 +178,7 @@ class ExportCANM_5(bpy.types.Operator, ExportHelper):
         from . import export_canm
 
         keywords = self.as_keywords(ignore=())
+        keywords['version'] = 5
 
         return export_canm.save(self, context, **keywords)
 
@@ -190,6 +191,35 @@ class ExportCANM_5(bpy.types.Operator, ExportHelper):
         return (context.active_object is not None) and (not context.active_object.mode == 'EDIT')
 
 
+class ExportCANM_6(bpy.types.Operator, ExportHelper):
+    """Write an EDF6 CANM file"""
+    bl_idname = "export_scene_edf6.canm"
+    bl_label = "Export CANM EDF6"
+    bl_options = {'UNDO', 'PRESET'}
+
+    filename_ext = ".CANM"
+    filter_glob: StringProperty(default="*.canm", options={'HIDDEN'})
+
+    check_extension = True
+
+    def execute(self, context):
+        from . import export_canm
+
+        keywords = self.as_keywords(ignore=())
+        keywords['version'] = 6
+        return export_canm.save(self, context, **keywords)
+
+    def draw(self, context):
+        pass
+
+    @classmethod
+    def poll(cls, context):
+        return (
+            context.active_object is not None
+            and context.active_object.mode != 'EDIT'
+        )
+
+
 def menu_func_import(self, context):
     self.layout.operator(ImportMDB.bl_idname, text="Earth Defense Force Model (.mdb)")
     self.layout.operator(ImportCANM.bl_idname, text="Earth Defense Force Animations (.canm)")
@@ -199,6 +229,7 @@ def menu_func_export(self, context):
     self.layout.operator(ExportMDB_5.bl_idname, text="Earth Defense Force 5 Model (.mdb)")
     self.layout.operator(ExportMDB_6.bl_idname, text="Earth Defense Force 6 Model (.mdb)")
     self.layout.operator(ExportCANM_5.bl_idname, text="Earth Defense Force 5 Animation (.canm)")
+    self.layout.operator(ExportCANM_6.bl_idname, text="Earth Defense Force 6 Animation (.canm)")
 
 
 classes = (
@@ -207,6 +238,7 @@ classes = (
     ExportMDB_6,
     ImportCANM,
     ExportCANM_5,
+    ExportCANM_6,
 )
 
 

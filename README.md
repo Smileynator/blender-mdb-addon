@@ -11,10 +11,8 @@ Please leave any problems as an Issue with logs and screenshots if possible.
 Very little error catching has been implemented, so expect some problems.
 
 ## Features
-- Importing of any .mdb Model (EDF6 might have shader issues!)
-- Exporting of any .mdb Model (EDF6 might have shader issues!)
-- Importing of any .canm Animations on top of a model (EDF5 only)
-- Exporting of any .canm Animations from a model (EDF5 only)
+- Importing and exporting EDF5/EDF6 .mdb models
+- Importing and exporting EDF5/EDF6 .canm animations
 - Bone support
 - Editable MDB material parameters with lossless material-data preservation
 - Mesh editing support
@@ -29,10 +27,16 @@ Very little error catching has been implemented, so expect some problems.
 - Import .mdb under "File->Import->Earth Defense Force Model (.mdb)"
 - Export .mdb under "File->Export->Earth Defense Force Model (.mdb)"
 - Import .canm under "File->Import->Earth Defense Force Animation (.canm)"
-- Export .canm under "File->Export->Earth Defense Force Animation (.canm)"
+- Export .canm under the separate EDF5 and EDF6 animation entries in "File->Export"
 
 # MDB Notes
-Exporting will fail if the model contains N-gons. (Tangent space can only be computed for tris/quads)
+MDB export requires every face to be triangulated. Export is cancelled before writing if any quad or n-gon remains.
+
+The exporter enforces the game's four-influence vertex limit. When a vertex has more than four positive bone weights, the four strongest are retained and normalized. Meshes with an Armature modifier but no actual positive weights are exported without unnecessary blend-index and blend-weight channels.
+
+Blender stores UVs and split normals per face corner while MDB stores them per vertex. Export therefore splits vertices where UVs, normals, or tangent-space data differ so seams remain intact.
+
+Bone bounding boxes are always recomputed from the geometry being exported. Weighted vertices supply deform-bone bounds; matching same-named objects supply bounds for the unskinned bone groups observed to use rigid geometry. This is mandatory because preserved import-time bounds become invalid after geometry or rig edits.
 
 Shader details might be incomplete, but most of the visual aspects should be there.
 
@@ -77,6 +81,8 @@ Custom Properties you should know about:
   - Render Type is almost always 3, but seems to be set to 2 for objects which "update" their texture, like fill bars, or the shield bearer's shield.
  
 # CANM Notes
+CANM import detects EDF5 (`512`) and EDF6 (`768`) automatically. Export provides separate EDF5 and EDF6 entries. EDF6 rotation channels use absolute quaternions and their keyframe block is written with 16-byte alignment.
+
 Animations can only be imported for the skeleton they are means to go with. So match the CANM file with the MDB file it belongs with, and import the MDB first.
 
 To get a CANM file, you need to extract them, and later re-add them to a CAS file. Use my packing tool for this: https://github.com/Smileynator/CAS-Processor

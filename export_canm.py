@@ -96,14 +96,32 @@ def convert_to_ushort(array, min, diff):
 
 
 def check_duplicate_channel(channels, channel):
+    channel_type = channel.get('type')
+    if channel_type in (2, 3):
+        for index, existing in enumerate(channels):
+            if existing.get('type') != channel_type:
+                continue
+            if channel_type == 2:
+                if all(
+                    channel[name] == existing[name]
+                    for name in ('base_x', 'base_y', 'base_z', 'base_w')
+                ):
+                    return index
+            elif channel['frames'] == existing['frames']:
+                return index
+        return -1
     if channel['has_frames'] == False:
         for i in range(len(channels)):
+            if channels[i].get('type') != channel_type:
+                continue
             if channel['base_x'] == channels[i]['base_x'] and \
                 channel['base_y'] == channels[i]['base_y'] and \
                 channel['base_z'] == channels[i]['base_z']:
                 return i
     else:
         for i in range(len(channels)):
+            if channels[i].get('type') != channel_type:
+                continue
             if channel['base_x'] == channels[i]['base_x'] and \
                 channel['base_y'] == channels[i]['base_y'] and \
                 channel['base_z'] == channels[i]['base_z'] and \
@@ -118,7 +136,7 @@ def check_duplicate_channel(channels, channel):
 
 
 # Generate a matrix for every frame of the animation to read out later
-def get_matrix_channel_from_curves(animation, bone):
+def get_matrix_channel_from_curves(animation, bone, version):
     matrix_channels = {}
     matrix_channels['position'] = []
     matrix_channels['rotation'] = []
@@ -146,6 +164,7 @@ def get_matrix_channel_from_curves(animation, bone):
 
     # Create actual matrix per frame
     last_euler = None
+    last_quaternion = None
     for i in range(keyframes):
         pos = mathutils.Vector((0.0, 0.0, 0.0))
         rot = mathutils.Quaternion()
@@ -196,18 +215,27 @@ def get_matrix_channel_from_curves(animation, bone):
             if 'position' in bone:
                 matrix_channels['position'].append(p)
             if 'rotation' in bone:
-                if last_euler:
-                    last_euler = r.to_euler('XYZ', last_euler)
+                if version == 6:
+                    if last_quaternion is not None and r.dot(last_quaternion) < 0:
+                        r = -r
+                    last_quaternion = r.copy()
+                    matrix_channels['rotation'].append(r)
                 else:
-                    last_euler = r.to_euler('XYZ')
-                matrix_channels['rotation'].append(last_euler)
+                    if last_euler:
+                        last_euler = r.to_euler('XYZ', last_euler)
+                    else:
+                        last_euler = r.to_euler('XYZ')
+                    matrix_channels['rotation'].append(last_euler)
             if 'scale' in bone:
                 matrix_channels['scale'].append(s)
         else:
             # Just an empty matrix for the fake bone
             # TODO: If fake bones do have animations, this needs to be fixed here as well
             matrix_channels['position'].append(pos)
-            matrix_channels['rotation'].append(rot.to_euler('XYZ'))
+            if version == 6:
+                matrix_channels['rotation'].append(rot)
+            else:
+                matrix_channels['rotation'].append(rot.to_euler('XYZ'))
             matrix_channels['position_frames'] = False
             matrix_channels['rotation_frames'] = False
             # No scale required for these
@@ -273,21 +301,77 @@ def vector_to_channel(vector_array, has_frames):
     return channel
 
 
+def quaternion_to_channel(quaternions, has_frames):
+    """Build an EDF6 static or animated quaternion channel."""
+    channel = {
+        'has_frames': has_frames,
+        'type': 3 if has_frames else 2,
+        'keyframes': len(quaternions) if has_frames else 1,
+        'frames': [],
+        'base_x': round_precision(quaternions[0].x),
+        'base_y': round_precision(quaternions[0].y),
+        'base_z': round_precision(quaternions[0].z),
+        'base_w': round_precision(quaternions[0].w),
+        'speed_x': 0.0,
+        'speed_y': 0.0,
+        'speed_z': 0.0,
+        'speed_w': 0.0,
+    }
+    if has_frames:
+        channel['frames'] = [
+            (
+                round_precision(quaternion.x),
+                round_precision(quaternion.y),
+                round_precision(quaternion.z),
+                round_precision(quaternion.w),
+            )
+            for quaternion in quaternions
+        ]
+    return channel
+
+
 # A channel is X Y Z values of postion, rotation or scale
-def get_channels(animations):
+def get_channels(animations, version):
     channels = []
-    # Always add empty channel first
+    # Always add the empty position/scale channel first.
     chan = {'has_frames': False, 'keyframes': 1, 'base_x': 0, 'base_y': 0, 'base_z': 0, 'speed_x': 0.0, 'speed_y': 0.0,
             'speed_z': 0.0, 'offsets_x': [], 'offsets_y': [], 'offsets_z': []}
+    if version == 6:
+        chan.update({
+            'type': 0,
+            'base_w': 1.0,
+            'speed_w': 0.0,
+        })
     channels.append(chan)
+    if version == 6:
+        channels.append({
+            'has_frames': False,
+            'type': 2,
+            'keyframes': 1,
+            'frames': [],
+            'base_x': 0.0,
+            'base_y': 0.0,
+            'base_z': 0.0,
+            'base_w': 1.0,
+            'speed_x': 0.0,
+            'speed_y': 0.0,
+            'speed_z': 0.0,
+            'speed_w': 0.0,
+        })
     # Now cover all animation channels
     for animation in animations:
         for bone in animation['bone_data']:
-            matrix_channel = get_matrix_channel_from_curves(animation, bone)
+            matrix_channel = get_matrix_channel_from_curves(animation, bone, version)
             # Is we have position, or is_empty, we add the channel.
             # If is_empty AND we have pose bone, we need to ignore the bone, because they omitted data on purpose.
             if 'position' in bone or (bone['is_empty'] and bone['pose_bone'] is None):
                 channel = vector_to_channel(matrix_channel['position'], matrix_channel['position_frames'])
+                if version == 6:
+                    channel.update({
+                        'type': 1 if channel['has_frames'] else 0,
+                        'base_w': 1.0,
+                        'speed_w': 0.0,
+                    })
                 bone['channel_index_pos'] = check_duplicate_channel(channels, channel)
                 if bone['channel_index_pos'] == -1:
                     bone['channel_index_pos'] = len(channels)
@@ -296,7 +380,16 @@ def get_channels(animations):
                 bone['channel_index_pos'] = -1
 
             if 'rotation' in bone or (bone['is_empty'] and bone['pose_bone'] is None):
-                channel = vector_to_channel(matrix_channel['rotation'], matrix_channel['rotation_frames'])
+                if version == 6:
+                    channel = quaternion_to_channel(
+                        matrix_channel['rotation'],
+                        matrix_channel['rotation_frames'],
+                    )
+                else:
+                    channel = vector_to_channel(
+                        matrix_channel['rotation'],
+                        matrix_channel['rotation_frames'],
+                    )
                 bone['channel_index_rot'] = check_duplicate_channel(channels, channel)
                 if bone['channel_index_rot'] == -1:
                     bone['channel_index_rot'] = len(channels)
@@ -306,6 +399,12 @@ def get_channels(animations):
 
             if 'scale' in bone:
                 channel = vector_to_channel(matrix_channel['scale'], matrix_channel['scale_frames'])
+                if version == 6:
+                    channel.update({
+                        'type': 1 if channel['has_frames'] else 0,
+                        'base_w': 1.0,
+                        'speed_w': 0.0,
+                    })
                 bone['channel_index_scale'] = check_duplicate_channel(channels, channel)
                 if bone['channel_index_scale'] == -1:
                     bone['channel_index_scale'] = len(channels)
@@ -315,9 +414,9 @@ def get_channels(animations):
     return channels
 
 
-def write_header(file, bone_names, animations, channels):
+def write_header(file, file_version, bone_names, animations, channels):
     file.write(b'CANM')
-    file.write(pack('I', 512))
+    file.write(pack('I', file_version))
     # Animation Data
     file.write(pack('I', len(animations)))
     file.write(pack('I', 0))
@@ -360,6 +459,56 @@ def write_channels(file, channels):
     # Padding to nearest 4
     padding_needed = (4 - (file.tell() % 4)) % 4
     file.write(b'\0' * padding_needed)
+
+
+def write_channels6(file, channels):
+    """Write EDF6 0x30-byte channels and their grouped keyframe blocks."""
+    for channel in channels:
+        channel['base_pos'] = file.tell()
+        file.write(pack('f', channel['base_x']))
+        file.write(pack('f', channel['base_y']))
+        file.write(pack('f', channel['base_z']))
+        file.write(pack('f', channel['base_w']))
+        file.write(pack('f', channel['speed_x']))
+        file.write(pack('f', channel['speed_y']))
+        file.write(pack('f', channel['speed_z']))
+        file.write(pack('f', channel['speed_w']))
+        channel['frames_pos'] = file.tell()
+        file.write(pack('I', 0))
+        file.write(pack('i', channel['type']))
+        file.write(pack('i', channel['keyframes']))
+        file.write(pack('i', 0))
+
+    for channel in channels:
+        if channel['keyframes'] <= 1 or channel['type'] != 1:
+            continue
+        rewrite_offset(
+            file,
+            channel['frames_pos'],
+            file.tell(),
+            channel['base_pos'],
+        )
+        for index in range(channel['keyframes']):
+            file.write(pack('H', channel['offsets_x'][index]))
+            file.write(pack('H', channel['offsets_y'][index]))
+            file.write(pack('H', channel['offsets_z'][index]))
+
+    # EDF6 begins the absolute quaternion block at a 16-byte aligned
+    # absolute file offset.
+    padding_needed = (16 - (file.tell() % 16)) % 16
+    file.write(b'\0' * padding_needed)
+    for channel in channels:
+        if channel['keyframes'] <= 1 or channel['type'] != 3:
+            continue
+        rewrite_offset(
+            file,
+            channel['frames_pos'],
+            file.tell(),
+            channel['base_pos'],
+        )
+        for quaternion in channel['frames']:
+            file.write(pack('4f', *quaternion))
+
 
 # Seeks to the target, writes a file offset relative to the given base, returns to original position
 def rewrite_offset(file, rewrite_target, current_position, target_base_offset):
@@ -435,7 +584,9 @@ def write_all_strings(file, bone_names, animations):
         write_str_obj(file, obj)
 
 
-def save(operator, context, filepath="", **kwargs):
+def save(operator, context, filepath="", version=0, **kwargs):
+    assert version in (5, 6)
+    file_version = 512 if version == 5 else 768
     # Get the armature
     armature = bpy.data.armatures[0]
     if not armature:
@@ -454,14 +605,17 @@ def save(operator, context, filepath="", **kwargs):
     bone_names = get_bone_names(missing_bones)
     pose_bones = get_pose_bones(bone_names, armature_object)
     animations = get_animations(bone_names, pose_bones)
-    channels = get_channels(animations)
+    channels = get_channels(animations, version)
     with open(filepath, 'wb') as file:
         # Header
-        write_header(file, bone_names, animations, channels)
+        write_header(file, file_version, bone_names, animations, channels)
         # Write header Channel Offset
         rewrite_offset(file, 0x14, file.tell(), 0x00)
         # Write all Channels
-        write_channels(file, channels)
+        if version == 6:
+            write_channels6(file, channels)
+        else:
+            write_channels(file, channels)
         # Write header Animations Offset
         rewrite_offset(file, 0x0C, file.tell(), 0x00)
         # Write all Animations
