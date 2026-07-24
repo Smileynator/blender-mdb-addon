@@ -13,7 +13,6 @@ from .mdb_format import (
     EDF6_VERSION,
     MATERIAL_METADATA_PROPERTIES,
     SOURCE_ID_PROPERTY,
-    SOURCE_PATH_PROPERTY,
     TEXTURE_METADATA_PROPERTIES,
     VERTEX_TYPE_FLOAT2,
     VERTEX_TYPE_FLOAT3,
@@ -49,7 +48,10 @@ def source_id_of(data_block):
     source_id = data_block.get(SOURCE_ID_PROPERTY)
     if source_id:
         return source_id
-    return source_id_of(getattr(data_block, 'data', None))
+    source_id = source_id_of(getattr(data_block, 'data', None))
+    if source_id:
+        return source_id
+    return source_id_of(getattr(data_block, 'parent', None))
 
 
 def get_export_source_id(context):
@@ -88,14 +90,14 @@ def get_unique_names(source_id, armature):
     # Messing this up causes the game to break frogs and other detaching limb systems.
 
     # Get all bone names
-    for bone in bpy.data.armatures[0].bones:
+    for bone in armature.bones:
         if bone.name not in names_set:
             names_set.add(bone.name)
             names_list.append(bone.name)
 
     # Only model-container empties belong in the MDB name table. Armatures,
     # cameras, lights, and unrelated scene helpers must not leak into it.
-    for obj in iter_mdb_containers():
+    for obj in iter_mdb_containers(source_id):
         name = obj['mdb_name']
         if name not in names_set:
             names_set.add(name)
@@ -103,7 +105,11 @@ def get_unique_names(source_id, armature):
 
     # Only materials that will actually be exported belong in the table.
     for material in bpy.data.materials:
-        if material.use_nodes and find_mdb_shader_node(material) is not None:
+        if (
+            source_id_of(material) == source_id
+            and material.use_nodes
+            and find_mdb_shader_node(material) is not None
+        ):
             name = material['mdb_name']
             if name not in names_set:
                 names_set.add(name)
@@ -111,22 +117,26 @@ def get_unique_names(source_id, armature):
     return names_list
 
 
-def iter_mdb_containers():
+def iter_mdb_containers(source_id):
     for obj in bpy.data.objects:
-        if obj.data is None and any(child.type == 'MESH' for child in obj.children):
+        if (
+            source_id_of(obj) == source_id
+            and obj.data is None
+            and any(child.type == 'MESH' for child in obj.children)
+        ):
             yield obj
 
 
-def iter_exported_mesh_objects():
-    for container in iter_mdb_containers():
+def iter_exported_mesh_objects(source_id):
+    for container in iter_mdb_containers(source_id):
         for child in container.children:
             if child.type == 'MESH':
                 yield child
 
 
-def iter_assigned_materials():
+def iter_assigned_materials(source_id):
     seen = set()
-    for mesh_object in iter_exported_mesh_objects():
+    for mesh_object in iter_exported_mesh_objects(source_id):
         for material in mesh_object.data.materials:
             if material is None or material in seen:
                 continue
@@ -134,25 +144,24 @@ def iter_assigned_materials():
             yield material
 
 
-def find_non_triangulated_meshes():
+def find_non_triangulated_meshes(source_id):
     return [
         mesh_object.name
-        for mesh_object in iter_exported_mesh_objects()
+        for mesh_object in iter_exported_mesh_objects(source_id)
         if any(polygon.loop_total != 3 for polygon in mesh_object.data.polygons)
     ]
 
 
-def find_overweight_vertices():
-    for mesh_object in iter_exported_mesh_objects():
+def find_overweight_vertices(source_id):
+    for mesh_object in iter_exported_mesh_objects(source_id):
         for vertex in mesh_object.data.vertices:
             if sum(group.weight > 0.0 for group in vertex.groups) > 4:
                 return True
     return False
 
 
-def get_bone_data(names):
+def get_bone_data(names, armature):
     bones = []
-    armature = bpy.data.armatures[0]
     if not armature:
         return
     # Make a lookup for bone indexes
@@ -203,11 +212,13 @@ def get_bone_data(names):
     return bones
 
 
-def get_textures():
+def get_textures(source_id):
     textures = []
 
     # Imported materials retain the original table, including unused entries.
     for material in bpy.data.materials:
+        if source_id_of(material) != source_id:
+            continue
         encoded_table = material.get('mdb_texture_table')
         if encoded_table:
             table = json.loads(encoded_table)
@@ -216,7 +227,7 @@ def get_textures():
 
     # Used binding nodes expose editable copies of their table entries.
     for material in bpy.data.materials:
-        if not material.use_nodes:
+        if source_id_of(material) != source_id or not material.use_nodes:
             continue
         for node in material.node_tree.nodes:
             if node.type != 'TEX_IMAGE':
@@ -233,14 +244,16 @@ def get_textures():
     return textures
 
 
-def get_materials(indexed_strings):
-    # TODO: Associate imported materials with their source MDB so tagged
-    # materials from another imported model cannot leak into this export.
+def get_materials(indexed_strings, source_id):
     materials = []
     valid_materials = []
     # Only explicitly tagged MDB materials are exportable.
     for material in bpy.data.materials:
-        if material.use_nodes and find_mdb_shader_node(material) is not None:
+        if (
+            source_id_of(material) == source_id
+            and material.use_nodes
+            and find_mdb_shader_node(material) is not None
+        ):
             valid_materials.append(material)
 
     valid_materials.sort(key=lambda material: material['mdb_material_index'])
@@ -331,10 +344,10 @@ def get_preserved_texture(image_node):
 
 
 # Gathers all objects and their underlying data
-def get_objects(names, materials, game_version):
+def get_objects(names, materials, game_version, source_id):
     objects = []
     obj_index = 0
-    for obj in iter_mdb_containers():
+    for obj in iter_mdb_containers(source_id):
         object_name = obj['mdb_name']
         object_data = {
             'index': obj_index,
@@ -654,17 +667,22 @@ def report_export(operator, level, message):
     print(f'{level}: {message}')
 
 
-def find_incomplete_mdb_metadata():
+def find_incomplete_mdb_metadata(source_id, armature):
     missing = []
-    if len(bpy.data.armatures) == 0:
+    if armature is None:
         return ['armature: missing']
-    for bone in bpy.data.armatures[0].bones:
+    for bone in armature.bones:
         absent = [name for name in BONE_METADATA_PROPERTIES if name not in bone]
         if absent:
             missing.append(f"bone '{bone.name}': {', '.join(absent)}")
 
-    assigned_materials = set(iter_assigned_materials())
+    assigned_materials = set(iter_assigned_materials(source_id))
     for material in assigned_materials:
+        if source_id_of(material) != source_id:
+            missing.append(
+                f"material '{material.name}': belongs to a different MDB import",
+            )
+            continue
         if not material.use_nodes:
             missing.append(f"material '{material.name}': nodes disabled")
             continue
@@ -674,6 +692,8 @@ def find_incomplete_mdb_metadata():
             )
 
     for material in bpy.data.materials:
+        if source_id_of(material) != source_id:
+            continue
         shader_node = (
             find_mdb_shader_node(material)
             if material.use_nodes
@@ -698,7 +718,7 @@ def find_incomplete_mdb_metadata():
         if absent:
             missing.append(f"material '{material.name}': {', '.join(absent)}")
 
-    for container in iter_mdb_containers():
+    for container in iter_mdb_containers(source_id):
         if 'mdb_name' not in container:
             missing.append(f"object '{container.name}': mdb_name")
     return missing
@@ -717,12 +737,12 @@ class ExportData:
     utf16_strings: list = field(default_factory=list)
 
 
-def build_export_data(game_version):
-    names = get_unique_names()
-    bones = get_bone_data(names)
-    textures = get_textures()
-    materials = get_materials(names)
-    objects = get_objects(names, materials, game_version)
+def build_export_data(game_version, source_id, armature):
+    names = get_unique_names(source_id, armature)
+    bones = get_bone_data(names, armature)
+    textures = get_textures(source_id)
+    materials = get_materials(names, source_id)
+    objects = get_objects(names, materials, game_version, source_id)
     recompute_bone_bounding_boxes(bones, objects)
     objects = sort_objects_by_name_order(objects, bones)
     file_version = EDF5_VERSION if game_version == 5 else EDF6_VERSION
@@ -738,11 +758,16 @@ def build_export_data(game_version):
 
 
 def save(operator, context, filepath="", version=0, **kwargs):
-    del context, kwargs
+    del kwargs
     if version not in (5, 6):
         report_export(operator, 'ERROR', f'Unsupported export version {version}.')
         return {'CANCELLED'}
-    non_triangular = find_non_triangulated_meshes()
+    source_id, source_error = get_export_source_id(context)
+    if source_error:
+        report_export(operator, 'ERROR', source_error)
+        return {'CANCELLED'}
+    armature = get_source_armature(source_id)
+    non_triangular = find_non_triangulated_meshes(source_id)
     if non_triangular:
         message = (
             'MDB export requires triangulated meshes. Export cancelled for: '
@@ -750,7 +775,7 @@ def save(operator, context, filepath="", version=0, **kwargs):
         )
         report_export(operator, 'ERROR', message)
         return {'CANCELLED'}
-    incomplete_metadata = find_incomplete_mdb_metadata()
+    incomplete_metadata = find_incomplete_mdb_metadata(source_id, armature)
     if incomplete_metadata:
         report_export(
             operator,
@@ -760,14 +785,14 @@ def save(operator, context, filepath="", version=0, **kwargs):
             + '; '.join(incomplete_metadata[:8]),
         )
         return {'CANCELLED'}
-    if find_overweight_vertices():
+    if find_overweight_vertices(source_id):
         report_export(
             operator,
             'WARNING',
             'Vertices with more than four bone influences will use their four '
             'strongest influences, normalized to a total weight of 1.',
         )
-    data = build_export_data(version)
+    data = build_export_data(version, source_id, armature)
 
     with open(filepath, 'wb') as file:
         write_mdb(file, data)

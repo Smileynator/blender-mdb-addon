@@ -46,6 +46,7 @@ def main():
     from _mdb_export_safety import export_mdb
 
     container = bpy.data.objects.new("Container", None)
+    container["mdb_source_id"] = "export-safety"
     bpy.context.scene.collection.objects.link(container)
     quad = create_mesh(
         "Quad",
