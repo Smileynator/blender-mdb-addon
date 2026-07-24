@@ -116,6 +116,7 @@ def main():
             seam_mesh.data,
             True,
             vertex_loop_pairs,
+            5,
         )
     }
     strongest_weights = layouts["BLENDWEIGHT"]["data"][0]

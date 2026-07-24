@@ -6,10 +6,27 @@ import bpy
 import mathutils
 import numpy as np
 
-from struct import unpack
+from dataclasses import dataclass
+from .mdb_format import (
+    MdbFormatError,
+    read_uint,
+)
+from .mdb_parser import (
+    parse_bones,
+    parse_indices,
+    parse_mat_param,
+    parse_mat_txr,
+    parse_materials,
+    parse_mdb,
+    parse_meshes,
+    parse_names,
+    parse_objects,
+    parse_textures,
+    parse_vertex_layout,
+    parse_vertices,
+)
 from .shader import new_socket, get_shader
 
-is_edf6 = False
 MDB_EDITING_NOTES = """MDB material editing
 
 - Unlinked numeric/color inputs on the shader group are MDB parameters and are exported.
@@ -29,374 +46,15 @@ bone_up_Y = mathutils.Matrix(((1.0, 0.0, 0.0, 0.0),
                             (0.0, 0.0, 0.0, 1.0)))
 
 
-# Read helper functions
-def read_ushort(file):
-    return unpack('<H', file.read(2))[0]
+@dataclass(frozen=True)
+class ImportSettings:
+    ignore_errors: bool = False
+    override_version: int = 0
 
-
-def read_short(file):
-    return unpack('<h', file.read(2))[0]
-
-
-def read_byte(file):
-    return unpack('<b', file.read(1))[0]
-
-
-def read_int(file):
-    return unpack('<i', file.read(4))[0]
-
-
-def read_uint(file):
-    return unpack('<I', file.read(4))[0]
-
-
-def read_float(file):
-    return unpack('<f', file.read(4))[0]
-
-
-def read_str(file):
-    data = bytearray()
-    while True:
-        char = file.read(1)
-        if char == b'\0':
-            break
-        data.extend(char)
-    return data.decode('shift-jis')
-
-
-def read_wstr(file):
-    data = bytearray()
-    while True:
-        char = file.read(2)
-        if char == b'\0\0':
-            break
-        data.extend(char)
-    return data.decode('utf-16')
-
-
-def read_matrix(file):
-    mat = mathutils.Matrix()
-    for y in range(4):
-        for x in range(4):
-            mat[x][y] = read_float(file)
-    return mat
-
-# Parsing functions
-def parse_names(f, count, offset):
-    names = []
-    f.seek(offset)
-    for i in range(count):
-        base = f.tell()
-        str_offset = read_uint(f)
-        next = f.tell()
-        assert next - base == 4
-
-        if str_offset != 0:
-            f.seek(base+str_offset)
-            names.append(read_wstr(f))
-            f.seek(next)
-        else:
-            names.append(None)
-    return names
-
-
-def parse_bones(f, count, offset, name_table):
-    bones = []
-    f.seek(offset)
-    for i in range(count):
-        bone = {}
-        base = f.tell()
-        
-        bone['index'] = read_uint(f) # Bone Index
-        bone['parent'] = read_int(f) # Parent index -1 for none.
-        bone['next_sibling'] = read_int(f) # Next Sibling index -1 for none.
-        bone['first_child'] = read_int(f) # First Child index -1 for none.
-        bone['name'] = name_table[read_uint(f)] # Bone name
-        bone['child_count'] = read_uint(f) # Child bone count
-        bone['participation_metadata'] = f.read(1)[0]
-        bone['semantic_role'] = read_byte(f)
-        bone['normalized_bone_flag'] = f.read(1)[0] == 1
-        f.read(5)  # Reserved/alignment
-
-        bone['matrix_local'] = read_matrix(f) # Transformation Matrix local
-        bone['matrix_invbind'] = read_matrix(f) # Transformation Matrix Invert Bind Pose
-
-        bone['bounds_half_size'] = [read_float(f) for _ in range(4)]
-        bone['bounds_center'] = [read_float(f) for _ in range(4)]
-        
-        next = f.tell()
-        assert next - base == 192
-
-        f.seek(next)
-        bones.append(bone)
-        
-    return bones
-
-
-def parse_textures(f, count, offset):
-    textures = []
-    f.seek(offset)
-    for i in range(count):
-        texture = {}
-        base = f.tell()
-        texture['index'] = read_uint(f)
-        name = read_uint(f)
-        filename = read_uint(f)
-        f.read(4) # Always zero
-        next = f.tell()
-        assert next - base == 16
-
-        f.seek(base+name)
-        texture['name'] = read_wstr(f)
-        f.seek(base+filename)
-        texture['filename'] = read_wstr(f)
-
-        f.seek(next)
-        textures.append(texture)
-    return textures
-
-
-def parse_mat_param(f, count, offset):
-    mat_params = []
-    f.seek(offset)
-    for i in range(count):
-        mat_param = {}
-        base = f.tell()
-        mat_param['val0'] = read_float(f)
-        mat_param['val1'] = read_float(f)
-        mat_param['val2'] = read_float(f)
-        mat_param['val3'] = read_float(f)
-        mat_param['val4'] = read_float(f)
-        mat_param['val5'] = read_float(f)
-        name = read_uint(f)
-        mat_param['type'] = f.read(1)[0]  # 0=Float, 1=Vector2, 2=RGB, 3=RGBA
-        mat_param['size'] = f.read(1)[0]  # Component/value count
-        f.read(2) # Always zero, padding
-        next = f.tell()
-        assert next - base == 32
-
-        f.seek(base+name)
-        mat_param['name'] = read_str(f)
-
-        f.seek(next)
-        mat_params.append(mat_param)
-    return mat_params
-
-
-def parse_mat_txr(f, count, offset):
-    mat_txrs = []
-    f.seek(offset)
-    for i in range(count):
-        mat_txr = {}
-        base = f.tell()
-        mat_txr['texture'] = read_uint(f)
-        type_name_offset = read_uint(f)
-        mat_txr['sampler_flags'] = read_ushort(f)
-        mat_txr['filter'] = read_short(f)
-        mat_txr['address_u'] = f.read(1)[0]
-        mat_txr['address_v'] = f.read(1)[0]
-        mat_txr['address_w'] = f.read(1)[0]
-        mat_txr['max_anisotropy'] = read_byte(f)
-        mat_txr['min_lod'] = read_float(f)
-        mat_txr['max_lod'] = read_float(f)
-        mat_txr['lod_bias'] = read_float(f)
-
-        next = f.tell()
-        assert next - base == 28
-
-        f.seek(base+type_name_offset)
-        mat_txr['map'] = read_str(f)
-
-        f.seek(next)
-        mat_txrs.append(mat_txr)
-    return mat_txrs
-
-
-def parse_materials(f, count, offset, name_table):
-    materials = []
-    f.seek(offset)
-    for i in range(count):
-        material = {}
-        base = f.tell()
-        material['index'] = read_ushort(f)
-        material['draw_priority'] = read_byte(f)
-        material['render_queue_class'] = f.read(1)[0]
-        material_name = read_uint(f)
-        shader = read_uint(f)
-        param_offset = read_uint(f)
-        param_count = read_uint(f)
-        txr_offset = read_uint(f)
-        txr_count = read_uint(f)
-        material['render_participation_flags'] = f.read(1)[0]
-        f.read(3)  # Reserved/alignment
-        next = f.tell()
-        assert next - base == 32
-
-        material['name'] = name_table[material_name]
-        f.seek(base+shader)
-        material['shader'] = read_wstr(f)
-
-        material['params'] = parse_mat_param(f, param_count, base+param_offset)
-        material['textures'] = parse_mat_txr(f, txr_count, base+txr_offset)
-
-        f.seek(next)
-        materials.append(material)
-    return materials
-
-
-def parse_vertex_layout(f, count, offset):
-    layout = []
-    f.seek(offset)
-    for i in range(count):
-        element = {}
-        base = f.tell()
-        element['type'] = read_uint(f)
-        element['offset'] = read_uint(f)
-        element['channel'] = read_uint(f)
-        name = read_uint(f)
-        next = f.tell()
-        assert next - base == 16
-
-        f.seek(base+name)
-        element['name'] = read_str(f)
-
-        f.seek(next)
-        layout.append(element)
-    return layout
-
-
-def parse_indices(f, count, offset):
-    indices = []
-    f.seek(offset)
-    for i in range(count):
-        indices.append(read_ushort(f))
-    return indices
-
-
-def parse_vertices(f, count, offset, layout, vertex_stride):
-    vertices = []
-    f.seek(offset)
-    # For each vertices
-    for i in range(count):
-        vertex = {}
-        # For each layout type
-        for j in range(len(layout)):
-            elem = layout[j]
-            array = []
-            # Figure out vertex type, and set array with content
-            type = elem['type']
-            if type == 1: #float4
-                array = unpack("ffff", f.read(16))
-            elif type == 4: #float3
-                array = unpack("fff", f.read(12))
-            elif type == 7: #half4
-                array = np.frombuffer(f.read(8), dtype=np.half)
-            elif type == 12: #float2
-                array = unpack("ff", f.read(8))
-            elif type == 21: #ubyte4
-                array = unpack("BBBB", f.read(4))
-            else:
-                print("Unknown vertex layout type: " + str(type))
-                if j < len(layout) - 1:
-                    f.seek(layout[j+1]['offset'] - elem['offset'])
-                else:
-                    f.seek(vertex_stride - elem['offset'])
-            vertex[elem['name'].lower() + str(elem['channel'])] = array
-        vertices.append(vertex)
-    return vertices
-
-
-def parse_meshes(f, count, offset):
-    meshes = []
-    f.seek(offset)
-    for i in range(count):
-        mesh = {}
-        base = f.tell()
-        mesh['topology_selector'] = f.read(1)[0]
-        mesh['is_skinned'] = f.read(1)[0]
-        mesh['bone_influence_count'] = read_byte(f)
-        mesh['reserved_alignment'] = f.read(1)[0]
-        mesh['material_index'] = read_int(f)
-        mesh['reserved_0x08'] = read_uint(f)
-        layout_offset = read_uint(f)
-        mesh['vertex_stride'] = read_ushort(f)
-        layout_count = read_ushort(f)
-        vertex_count = read_uint(f)
-        mesh['mesh_index'] = read_uint(f)
-        vertex_offset = read_uint(f)
-        index_count = read_uint(f)
-        index_offset = read_uint(f)
-        next = f.tell()
-        assert next - base == 40
-
-        mesh['layout'] = parse_vertex_layout(f, layout_count, base+layout_offset)
-        mesh['indices'] = parse_indices(f, index_count, base+index_offset)
-        mesh['vertices'] = parse_vertices(f, vertex_count, base+vertex_offset, mesh['layout'], mesh['vertex_stride'])
-
-        f.seek(next)
-        meshes.append(mesh)
-    return meshes
-
-
-def parse_objects(f, count, offset, name_table):
-    objects = []
-    f.seek(offset)
-    for i in range(count):
-        object = {}
-        base = f.tell()
-        object['index'] = read_uint(f)
-        name = read_uint(f)
-        mesh_count = read_uint(f)
-        mesh_offset = read_uint(f)
-        next = f.tell()
-        assert next - base == 16
-
-        object['name'] = name_table[name]
-        object['meshes'] = parse_meshes(f, mesh_count, base+mesh_offset)
-
-        f.seek(next)
-        objects.append(object)
-    return objects
-
-
-def parse_mdb(f):
-    mdb = {}
-    f.seek(0)
-    magic = f.read(4)
-    file_version = read_uint(f)
-    name_count = read_uint(f)
-    name_offset = read_uint(f)
-    bone_count = read_uint(f)
-    bone_offset = read_uint(f)
-    object_count = read_uint(f)
-    object_offset = read_uint(f)
-    material_count = read_uint(f)
-    material_offset = read_uint(f)
-    texture_count = read_uint(f)
-    texture_offset = read_uint(f)
-
-    assert magic == b'MDB0'
-    
-    if override_version != 0:
-        file_version = override_version
-    else:
-        assert file_version == 0x14 or file_version == 0x20
-    if file_version == 0x20:
-        global is_edf6
-        is_edf6 = True
-
-    mdb['names'] = parse_names(f, name_count, name_offset)
-    mdb['bones'] = parse_bones(f, bone_count, bone_offset, mdb['names'])
-    mdb['textures'] = parse_textures(f, texture_count, texture_offset)
-    mdb['materials'] = parse_materials(f, material_count, material_offset, mdb['names'])
-    mdb['objects'] = parse_objects(f, object_count, object_offset, mdb['names'])
-    return mdb
-
-
-def warnparam(input, material, param):
-    if input is None:
+def warnparam(socket, material, param):
+    if socket is None:
         print('Warning: Material ' + material['name'] + ' references missing parameter ' + material['shader'] + '.' + param['name'])
-    return input
+    return socket
 
 
 def add_material_editing_note(node_tree, shader_node):
@@ -420,277 +78,374 @@ def add_material_editing_note(node_tree, shader_node):
     note.select = False
 
 
-# Main function
-def load(operator, context, filepath='', **kwargs):
-    global ignore_errors
-    ignore_errors = operator.option_ignore_errors
-    global override_version
-    override_version = operator.option_override_version
-    # Parse MDB
-    with open(filepath, 'rb') as f:
-        mdb = parse_mdb(f)
+def ensure_normal_unswizzle_group():
+    existing = bpy.data.node_groups.get('Normal Unswizzle')
+    if existing is not None:
+        return existing
 
-    if bpy.ops.object.mode_set.poll():
-        bpy.ops.object.mode_set(mode="OBJECT")
+    spacing = 160
+    node_tree = bpy.data.node_groups.new(
+        'Normal Unswizzle',
+        'ShaderNodeTree',
+    )
+    group_inputs = node_tree.nodes.new('NodeGroupInput')
+    group_inputs.location[0] = spacing * 0
+    new_socket(node_tree, 'Color', 'INPUT', 'NodeSocketColor')
+    new_socket(node_tree, 'Alpha', 'INPUT', 'NodeSocketFloat')
 
-    # Texture cache
-    textures = {}
+    split_rgb = node_tree.nodes.new('ShaderNodeSeparateRGB')
+    split_rgb.location[0] = spacing * 1
+    node_tree.links.new(
+        split_rgb.inputs['Image'],
+        group_inputs.outputs['Color'],
+    )
 
-    # Create unswizzle node group
-    if bpy.data.node_groups.get('Normal Unswizzle') is None:
-        nspace = 160
-        unswizzle = bpy.data.node_groups.new('Normal Unswizzle', 'ShaderNodeTree')
+    value_r = node_tree.nodes.new('ShaderNodeMath')
+    value_r.location[0] = spacing * 2
+    value_r.operation = 'MULTIPLY'
+    node_tree.links.new(value_r.inputs[0], split_rgb.outputs['R'])
+    node_tree.links.new(value_r.inputs[1], group_inputs.outputs['Alpha'])
 
-        group_inputs = unswizzle.nodes.new('NodeGroupInput')
-        group_inputs.location[0] = nspace * 0
-        new_socket(unswizzle, 'Color', 'INPUT', 'NodeSocketColor')
-        new_socket(unswizzle, 'Alpha', 'INPUT', 'NodeSocketFloat')
+    multiply_r = node_tree.nodes.new('ShaderNodeMath')
+    multiply_r.location[0] = spacing * 3
+    multiply_r.operation = 'MULTIPLY_ADD'
+    node_tree.links.new(multiply_r.inputs[0], value_r.outputs['Value'])
+    multiply_r.inputs[1].default_value = 2.0
+    multiply_r.inputs[2].default_value = -1.0
 
-        splitRGB = unswizzle.nodes.new('ShaderNodeSeparateRGB')
-        splitRGB.location[0] = nspace * 1
-        unswizzle.links.new(splitRGB.inputs['Image'], group_inputs.outputs['Color'])
+    multiply_g = node_tree.nodes.new('ShaderNodeMath')
+    multiply_g.location[0] = spacing * 3
+    multiply_g.location[1] -= 170
+    multiply_g.operation = 'MULTIPLY_ADD'
+    node_tree.links.new(multiply_g.inputs[0], split_rgb.outputs['G'])
+    multiply_g.inputs[1].default_value = 2.0
+    multiply_g.inputs[2].default_value = -1.0
 
-        valR = unswizzle.nodes.new('ShaderNodeMath')
-        valR.location[0] = nspace * 2
-        valR.operation = 'MULTIPLY'
-        unswizzle.links.new(valR.inputs[0], splitRGB.outputs['R'])
-        unswizzle.links.new(valR.inputs[1], group_inputs.outputs['Alpha'])
+    squared_r = node_tree.nodes.new('ShaderNodeMath')
+    squared_r.location[0] = spacing * 4
+    squared_r.operation = 'MULTIPLY'
+    node_tree.links.new(squared_r.inputs[0], multiply_r.outputs['Value'])
+    node_tree.links.new(squared_r.inputs[1], multiply_r.outputs['Value'])
 
-        mulR = unswizzle.nodes.new('ShaderNodeMath')
-        mulR.location[0] = nspace * 3
-        mulR.operation = 'MULTIPLY_ADD'
-        unswizzle.links.new(mulR.inputs[0], valR.outputs['Value'])
-        mulR.inputs[1].default_value = 2.0
-        mulR.inputs[2].default_value = -1.0
+    squared_g = node_tree.nodes.new('ShaderNodeMath')
+    squared_g.location[0] = spacing * 4
+    squared_g.location[1] -= 170
+    squared_g.operation = 'MULTIPLY'
+    node_tree.links.new(squared_g.inputs[0], multiply_g.outputs['Value'])
+    node_tree.links.new(squared_g.inputs[1], multiply_g.outputs['Value'])
 
-        mulG = unswizzle.nodes.new('ShaderNodeMath')
-        mulG.location[0] = nspace * 3
-        mulG.location[1] = mulG.location[1] - 170
-        mulG.operation = 'MULTIPLY_ADD'
-        unswizzle.links.new(mulG.inputs[0], splitRGB.outputs['G'])
-        mulG.inputs[1].default_value = 2.0
-        mulG.inputs[2].default_value = -1.0
+    remaining_r = node_tree.nodes.new('ShaderNodeMath')
+    remaining_r.location[0] = spacing * 5
+    remaining_r.operation = 'SUBTRACT'
+    remaining_r.inputs[0].default_value = 1.0
+    node_tree.links.new(remaining_r.inputs[1], squared_r.outputs['Value'])
 
-        powR = unswizzle.nodes.new('ShaderNodeMath')
-        powR.location[0] = nspace * 4
-        powR.operation = 'MULTIPLY'
-        unswizzle.links.new(powR.inputs[0], mulR.outputs['Value'])
-        unswizzle.links.new(powR.inputs[1], mulR.outputs['Value'])
+    remaining_g = node_tree.nodes.new('ShaderNodeMath')
+    remaining_g.location[0] = spacing * 6
+    remaining_g.operation = 'SUBTRACT'
+    node_tree.links.new(remaining_g.inputs[0], remaining_r.outputs['Value'])
+    node_tree.links.new(remaining_g.inputs[1], squared_g.outputs['Value'])
 
-        powG = unswizzle.nodes.new('ShaderNodeMath')
-        powG.location[0] = nspace * 4
-        powG.location[1] = powG.location[1] - 170
-        powG.operation = 'MULTIPLY'
-        unswizzle.links.new(powG.inputs[0], mulG.outputs['Value'])
-        unswizzle.links.new(powG.inputs[1], mulG.outputs['Value'])
+    reconstructed_b = node_tree.nodes.new('ShaderNodeMath')
+    reconstructed_b.location[0] = spacing * 7
+    reconstructed_b.operation = 'SQRT'
+    node_tree.links.new(
+        reconstructed_b.inputs[0],
+        remaining_g.outputs['Value'],
+    )
 
-        subR = unswizzle.nodes.new('ShaderNodeMath')
-        subR.location[0] = nspace * 5
-        subR.operation = 'SUBTRACT'
-        subR.inputs[0].default_value = 1.0
-        unswizzle.links.new(subR.inputs[1], powR.outputs['Value'])
+    packed_b = node_tree.nodes.new('ShaderNodeMath')
+    packed_b.location[0] = spacing * 8
+    packed_b.operation = 'MULTIPLY_ADD'
+    node_tree.links.new(packed_b.inputs[0], reconstructed_b.outputs['Value'])
+    packed_b.inputs[1].default_value = 0.5
+    packed_b.inputs[2].default_value = 0.5
 
-        subG = unswizzle.nodes.new('ShaderNodeMath')
-        subG.location[0] = nspace * 6
-        subG.operation = 'SUBTRACT'
-        unswizzle.links.new(subG.inputs[0], subR.outputs['Value'])
-        unswizzle.links.new(subG.inputs[1], powG.outputs['Value'])
+    flipped_g = node_tree.nodes.new('ShaderNodeMath')
+    flipped_g.location[0] = spacing * 9
+    flipped_g.operation = 'SUBTRACT'
+    flipped_g.inputs[0].default_value = 1.0
+    node_tree.links.new(flipped_g.inputs[1], split_rgb.outputs['G'])
 
-        sqrtB = unswizzle.nodes.new('ShaderNodeMath')
-        sqrtB.location[0] = nspace * 7
-        sqrtB.operation = 'SQRT'
-        unswizzle.links.new(sqrtB.inputs[0], subG.outputs['Value'])
+    combine_rgb = node_tree.nodes.new('ShaderNodeCombineRGB')
+    combine_rgb.location[0] = spacing * 10
+    node_tree.links.new(combine_rgb.inputs['R'], value_r.outputs['Value'])
+    node_tree.links.new(combine_rgb.inputs['G'], flipped_g.outputs['Value'])
+    node_tree.links.new(combine_rgb.inputs['B'], packed_b.outputs['Value'])
 
-        valB = unswizzle.nodes.new('ShaderNodeMath')
-        valB.location[0] = nspace * 8
-        valB.operation = 'MULTIPLY_ADD'
-        unswizzle.links.new(valB.inputs[0], sqrtB.outputs['Value'])
-        valB.inputs[1].default_value = 0.5
-        valB.inputs[2].default_value = 0.5
+    group_outputs = node_tree.nodes.new('NodeGroupOutput')
+    group_outputs.location[0] = spacing * 11
+    new_socket(node_tree, 'Color', 'OUTPUT', 'NodeSocketColor')
+    node_tree.links.new(
+        group_outputs.inputs['Color'],
+        combine_rgb.outputs['Image'],
+    )
+    return node_tree
 
-        flipG = unswizzle.nodes.new('ShaderNodeMath')
-        flipG.location[0] = nspace * 9
-        flipG.operation = 'SUBTRACT'
-        flipG.inputs[0].default_value = 1.0
-        unswizzle.links.new(flipG.inputs[1], splitRGB.outputs['G'])
 
-        combineRGB = unswizzle.nodes.new('ShaderNodeCombineRGB')
-        combineRGB.location[0] = nspace * 10
-        unswizzle.links.new(combineRGB.inputs['R'], valR.outputs['Value'])
-        unswizzle.links.new(combineRGB.inputs['G'], flipG.outputs['Value'])
-        unswizzle.links.new(combineRGB.inputs['B'], valB.outputs['Value'])
+def set_material_parameter_values(shader_node, mdb_material):
+    for parameter in mdb_material['params']:
+        name = parameter['name']
+        size = parameter['size']
+        if size == 1:
+            socket = warnparam(
+                shader_node.inputs.get(name),
+                mdb_material,
+                parameter,
+            )
+            if socket is not None:
+                socket.default_value = parameter['val0']
+        elif size == 2:
+            socket_x = warnparam(
+                shader_node.inputs.get(name + '_x'),
+                mdb_material,
+                parameter,
+            )
+            if socket_x is not None:
+                shader_node.inputs[name + '_y'].default_value = parameter['val1']
+                socket_x.default_value = parameter['val0']
+        elif size >= 3:
+            color_socket = warnparam(
+                shader_node.inputs.get(name),
+                mdb_material,
+                parameter,
+            )
+            if color_socket is not None:
+                color_socket.default_value = (
+                    parameter['val0'],
+                    parameter['val1'],
+                    parameter['val2'],
+                    1,
+                )
+                alpha_socket = shader_node.inputs.get(name + '_alpha')
+                if alpha_socket is not None:
+                    alpha_socket.default_value = parameter['val3']
 
-        group_outputs = unswizzle.nodes.new('NodeGroupOutput')
-        group_outputs.location[0] = nspace * 11
-        new_socket(unswizzle, 'Color', 'OUTPUT', 'NodeSocketColor')
-        unswizzle.links.new(group_outputs.inputs['Color'], combineRGB.outputs['Image'])
 
-    # Create materials
-    materials = []
-    for mdb_material in mdb['materials']:
-        lshader = mdb_material['shader'].lower()
-        material = bpy.data.materials.new(mdb_material['name'])
-        # Custom properties
-        material['draw_priority'] = mdb_material['draw_priority']
-        material['render_queue_class'] = mdb_material['render_queue_class']
-        material['render_participation_flags'] = mdb_material['render_participation_flags']
-        material['mdb_name'] = mdb_material['name']
-        
-        if lshader.endswith('_alpha') or lshader.endswith('_hair'):
-            material.blend_method = 'HASHED'
-        elif lshader.endswith('_clip'):
-            material.blend_method = 'CLIP'
-        material.use_nodes = True
-        mat_nodes = material.node_tree
-        # Remove default node if it exists
-        for node in mat_nodes.nodes:
-            if node.type == 'BSDF_PRINCIPLED':
-                mat_nodes.nodes.remove(node)
-                break
-        unhandled = 0
+def load_texture_image(filepath, filename, slot_name, texture_cache):
+    if filename in texture_cache:
+        return texture_cache[filename]
 
-        shader = get_shader(mdb_material['shader'], ignore_errors, mdb_material)
-        if shader.has_alpha and material.blend_method == 'OPAQUE':
-            material.blend_method = 'HASHED'
+    model_directory = os.path.dirname(filepath)
+    candidates = (
+        os.path.join(model_directory, '..', 'HD-TEXTURE', filename),
+        os.path.join(model_directory, '..', 'TEXTURE', filename),
+    )
+    image = None
+    last_error = None
+    for candidate in candidates:
+        try:
+            image = bpy.data.images.load(candidate)
+            break
+        except RuntimeError as error:
+            last_error = error
 
-        mat_out = None
-        for node in mat_nodes.nodes:
-            if node.type == 'OUTPUT_MATERIAL':
-                mat_out = node
-                break
-        shader_node = material.node_tree.nodes.new('ShaderNodeGroup')
-        shader_node.node_tree = shader.shader_tree
-        shader_node['mdb_shader_name'] = mdb_material['shader']
-        shader_node['mdb_parameters'] = json.dumps(mdb_material['params'])
-        material['mdb_shader_name'] = mdb_material['shader']
-        material['mdb_material_index'] = mdb_material['index']
-        material['mdb_texture_table'] = json.dumps(mdb['textures'])
-        shader_node.show_options = False
-        shader_node.width = 240
-        shader_node.location[1] = mat_out.location[1]
-        mat_nodes.links.new(mat_out.inputs['Surface'], shader_node.outputs['Surface'])
-        add_material_editing_note(mat_nodes, shader_node)
+    if image is None:
+        print(f"Failed to load texture '{filename}': {last_error}")
+        return None
 
-        # Set up material parameters
-        for param in mdb_material['params']:
-            if param['size'] == 1:
-                input_node = warnparam(shader_node.inputs.get(param['name']), mdb_material, param)
-                if input_node is not None:
-                    input_node.default_value = param['val0']
-            elif param['size'] == 2:
-                input_x = warnparam(shader_node.inputs.get(param['name'] + '_x'), mdb_material, param)
-                if input_x is not None:
-                    input_y = shader_node.inputs.get(param['name'] + '_y')
-                    input_x.default_value = param['val0']
-                    input_y.default_value = param['val1']
-            elif param['size'] >= 3:
-                input_col = warnparam(shader_node.inputs.get(param['name']), mdb_material, param)
-                if input_col is not None:
-                    input_alpha = shader_node.inputs.get(param['name'] + '_alpha')
-                    input_col.default_value = (param['val0'], param['val1'], param['val2'], 1)
-                    # Only RGBA parameters expose a separate editable alpha socket.
-                    if input_alpha is not None:
-                        input_alpha.default_value = param['val3']
+    texture_cache[filename] = image
+    image.alpha_mode = 'CHANNEL_PACKED'
+    if 'albedo' not in slot_name and 'diffuse' not in slot_name:
+        image.colorspace_settings.name = 'Non-Color'
+    return image
 
-        # Add all material textures
-        for texture_binding_index, texture in enumerate(mdb_material['textures']):
-            txr_map = texture['map']
-            texImage = mat_nodes.nodes.new('ShaderNodeTexImage')
-            texture_record = mdb['textures'][texture['texture']]
-            filename = texture_record['filename']
-            texImage.name = f"MDB Texture {texture_binding_index}: {txr_map}"
-            texImage.label = f"{txr_map}: {filename}"
-            texImage['mdb_texture_binding'] = texture_binding_index
-            texImage['mdb_texture_index'] = texture['texture']
-            texImage['mdb_texture_name'] = texture_record['name']
-            texImage['mdb_texture_filename'] = filename
-            texImage['mdb_texture_slot'] = txr_map
-            texImage['mdb_sampler_flags'] = texture['sampler_flags']
-            texImage['mdb_filter'] = texture['filter']
-            texImage['mdb_address_u'] = texture['address_u']
-            texImage['mdb_address_v'] = texture['address_v']
-            texImage['mdb_address_w'] = texture['address_w']
-            texImage['mdb_max_anisotropy'] = texture['max_anisotropy']
-            texImage['mdb_min_lod'] = texture['min_lod']
-            texImage['mdb_max_lod'] = texture['max_lod']
-            texImage['mdb_lod_bias'] = texture['lod_bias']
-            if filename in textures:
-                texImage.image = textures[filename]
-            else:
-                #Try and load texture from HD or SD folder
-                image = None
-                try:
-                    image = bpy.data.images.load(os.path.join(os.path.dirname(filepath), '..', 'HD-TEXTURE', filename))
-                except RuntimeError as e: # Ignore texture import error
-                    print("Failed to find HD texture. Trying SD texture.")
-                if image is None:
-                    try:
-                        image = bpy.data.images.load(os.path.join(os.path.dirname(filepath), '..', 'TEXTURE', filename))
-                    except RuntimeError as e: # Ignore texture import error
-                        print("Failed to find SD texture.")
-                        print(e)
-                if image is not None:
-                    texImage.image = image
-                    textures[filename] = image
-                    # Why is Straight being treated as Premultiplied by cycles?
-                    image.alpha_mode = 'CHANNEL_PACKED'
-                    if 'albedo' not in txr_map and 'diffuse' not in txr_map:
-                        image.colorspace_settings.name = 'Non-Color'
 
-            texImage.location[0] = shader_node.location[0] - 700 + unhandled * 40
-            texImage.location[1] = shader_node.location[1] - unhandled * 40
-            unhandled += 1
-            input_col = shader_node.inputs.get(txr_map)
-            if input_col is not None:
-                if txr_map == 'normal' or txr_map == 'damage_normal':
-                    # Unswizzle normal map
-                    unswizzle = material.node_tree.nodes.new('ShaderNodeGroup')
-                    unswizzle.location[0] = shader_node.location[0] - 350
-                    unswizzle.node_tree = bpy.data.node_groups.get('Normal Unswizzle')
-                    unswizzle.show_options = False
-                    material.node_tree.links.new(unswizzle.inputs['Color'], texImage.outputs['Color'])
-                    material.node_tree.links.new(unswizzle.inputs['Alpha'], texImage.outputs['Alpha'])
+def connect_texture_preview(
+    material,
+    shader_node,
+    shader,
+    texture_node,
+    slot_name,
+):
+    node_tree = material.node_tree
+    color_socket = shader_node.inputs.get(slot_name)
+    if color_socket is None:
+        return
 
-                    # Connect fixed normal map
-                    normalMap = mat_nodes.nodes.new('ShaderNodeNormalMap')
-                    normalMap.location[0] = shader_node.location[0] - 200
-                    mat_nodes.links.new(normalMap.inputs['Color'], unswizzle.outputs['Color'])
-                    mat_nodes.links.new(input_col, normalMap.outputs['Normal'])
-                else:
-                    input_alpha = shader_node.inputs.get(txr_map + '_alpha')
-                    mat_nodes.links.new(input_col, texImage.outputs['Color'])
-                    if input_alpha is not None:
-                        mat_nodes.links.new(input_alpha, texImage.outputs['Alpha'])
-                param = shader.param_map.get(txr_map)
-                if param is not None and len(param) >= 3:
-                    uvmap = mat_nodes.nodes.new('ShaderNodeUVMap')
-                    uvmap.location[0] = texImage.location[0] - 200
-                    uvmap.location[1] = texImage.location[1] - 200
-                    uvmap.uv_map = 'UVMap' + str(param[2]+1)
-                    mat_nodes.links.new(texImage.inputs['Vector'], uvmap.outputs['UV'])
+    if slot_name in ('normal', 'damage_normal'):
+        unswizzle_node = node_tree.nodes.new('ShaderNodeGroup')
+        unswizzle_node.location[0] = shader_node.location[0] - 350
+        unswizzle_node.node_tree = bpy.data.node_groups.get(
+            'Normal Unswizzle',
+        )
+        unswizzle_node.show_options = False
+        node_tree.links.new(
+            unswizzle_node.inputs['Color'],
+            texture_node.outputs['Color'],
+        )
+        node_tree.links.new(
+            unswizzle_node.inputs['Alpha'],
+            texture_node.outputs['Alpha'],
+        )
 
-        # Deselect all nodes
-        for node in mat_nodes.nodes:
-            node.select = False
+        normal_map = node_tree.nodes.new('ShaderNodeNormalMap')
+        normal_map.location[0] = shader_node.location[0] - 200
+        node_tree.links.new(
+            normal_map.inputs['Color'],
+            unswizzle_node.outputs['Color'],
+        )
+        node_tree.links.new(color_socket, normal_map.outputs['Normal'])
+    else:
+        node_tree.links.new(color_socket, texture_node.outputs['Color'])
+        alpha_socket = shader_node.inputs.get(slot_name + '_alpha')
+        if alpha_socket is not None:
+            node_tree.links.new(alpha_socket, texture_node.outputs['Alpha'])
 
-        materials.append(material)
+    mapping = shader.param_map.get(slot_name)
+    if mapping is not None and len(mapping) >= 3:
+        uv_map = node_tree.nodes.new('ShaderNodeUVMap')
+        uv_map.location[0] = texture_node.location[0] - 200
+        uv_map.location[1] = texture_node.location[1] - 200
+        uv_map.uv_map = 'UVMap' + str(mapping[2] + 1)
+        node_tree.links.new(texture_node.inputs['Vector'], uv_map.outputs['UV'])
 
-    # Add armature and bones
+
+def add_material_texture(
+    material,
+    shader_node,
+    shader,
+    mdb,
+    texture,
+    binding_index,
+    filepath,
+    texture_cache,
+):
+    slot_name = texture['map']
+    texture_record = mdb['textures'][texture['texture']]
+    filename = texture_record['filename']
+    texture_node = material.node_tree.nodes.new('ShaderNodeTexImage')
+    texture_node.name = f"MDB Texture {binding_index}: {slot_name}"
+    texture_node.label = f"{slot_name}: {filename}"
+    texture_node['mdb_texture_binding'] = binding_index
+    texture_node['mdb_texture_index'] = texture['texture']
+    texture_node['mdb_texture_name'] = texture_record['name']
+    texture_node['mdb_texture_filename'] = filename
+    texture_node['mdb_texture_slot'] = slot_name
+    texture_node['mdb_sampler_flags'] = texture['sampler_flags']
+    texture_node['mdb_filter'] = texture['filter']
+    texture_node['mdb_address_u'] = texture['address_u']
+    texture_node['mdb_address_v'] = texture['address_v']
+    texture_node['mdb_address_w'] = texture['address_w']
+    texture_node['mdb_max_anisotropy'] = texture['max_anisotropy']
+    texture_node['mdb_min_lod'] = texture['min_lod']
+    texture_node['mdb_max_lod'] = texture['max_lod']
+    texture_node['mdb_lod_bias'] = texture['lod_bias']
+    texture_node.image = load_texture_image(
+        filepath,
+        filename,
+        slot_name,
+        texture_cache,
+    )
+    texture_node.location[0] = shader_node.location[0] - 700 + binding_index * 40
+    texture_node.location[1] = shader_node.location[1] - binding_index * 40
+    connect_texture_preview(
+        material,
+        shader_node,
+        shader,
+        texture_node,
+        slot_name,
+    )
+
+
+def create_material(mdb, mdb_material, filepath, texture_cache, ignore_errors):
+    material = bpy.data.materials.new(mdb_material['name'])
+    material['draw_priority'] = mdb_material['draw_priority']
+    material['render_queue_class'] = mdb_material['render_queue_class']
+    material['render_participation_flags'] = (
+        mdb_material['render_participation_flags']
+    )
+    material['mdb_name'] = mdb_material['name']
+    material['mdb_shader_name'] = mdb_material['shader']
+    material['mdb_material_index'] = mdb_material['index']
+    material['mdb_texture_table'] = json.dumps(mdb['textures'])
+
+    shader_name = mdb_material['shader']
+    lower_shader_name = shader_name.lower()
+    if lower_shader_name.endswith(('_alpha', '_hair')):
+        material.blend_method = 'HASHED'
+    elif lower_shader_name.endswith('_clip'):
+        material.blend_method = 'CLIP'
+
+    material.use_nodes = True
+    node_tree = material.node_tree
+    default_bsdf = next(
+        (node for node in node_tree.nodes if node.type == 'BSDF_PRINCIPLED'),
+        None,
+    )
+    if default_bsdf is not None:
+        node_tree.nodes.remove(default_bsdf)
+
+    shader = get_shader(shader_name, ignore_errors, mdb_material)
+    if shader.has_alpha and material.blend_method == 'OPAQUE':
+        material.blend_method = 'HASHED'
+
+    material_output = next(
+        node for node in node_tree.nodes
+        if node.type == 'OUTPUT_MATERIAL'
+    )
+    shader_node = node_tree.nodes.new('ShaderNodeGroup')
+    shader_node.node_tree = shader.shader_tree
+    shader_node['mdb_shader_name'] = shader_name
+    shader_node['mdb_parameters'] = json.dumps(mdb_material['params'])
+    shader_node.show_options = False
+    shader_node.width = 240
+    shader_node.location[1] = material_output.location[1]
+    node_tree.links.new(
+        material_output.inputs['Surface'],
+        shader_node.outputs['Surface'],
+    )
+    add_material_editing_note(node_tree, shader_node)
+    set_material_parameter_values(shader_node, mdb_material)
+
+    for binding_index, texture in enumerate(mdb_material['textures']):
+        add_material_texture(
+            material,
+            shader_node,
+            shader,
+            mdb,
+            texture,
+            binding_index,
+            filepath,
+            texture_cache,
+        )
+
+    for node in node_tree.nodes:
+        node.select = False
+    return material
+
+
+def create_materials(mdb, filepath, ignore_errors):
+    texture_cache = {}
+    return [
+        create_material(
+            mdb,
+            mdb_material,
+            filepath,
+            texture_cache,
+            ignore_errors,
+        )
+        for mdb_material in mdb['materials']
+    ]
+
+
+def create_armature(mdb, filepath, context):
     armature = bpy.data.armatures.new('Armature')
-    armature_obj = bpy.data.objects.new(os.path.splitext(os.path.basename(filepath))[0], armature)
-    context.scene.collection.objects.link(armature_obj)
-    context.view_layer.objects.active = armature_obj
+    armature_object = bpy.data.objects.new(
+        os.path.splitext(os.path.basename(filepath))[0],
+        armature,
+    )
+    context.scene.collection.objects.link(armature_object)
+    context.view_layer.objects.active = armature_object
     bpy.ops.object.mode_set(mode='EDIT', toggle=False)
+
     edit_bones = armature.edit_bones
-    bones = []
+    created_bones = []
     for mdb_bone in mdb['bones']:
-        # Create bone with name
         bone = edit_bones.new(mdb_bone['name'])
-        # No length would mean they get removed for some reason, so we give it a fixed non zero length
         bone.length = 0.25
-        # Apply the transform matrix of the bone and parent
         if mdb_bone['parent'] >= 0:
-            bone.parent = bones[mdb_bone['parent']]
+            bone.parent = created_bones[mdb_bone['parent']]
             bone.matrix = bone.parent.matrix @ mdb_bone['matrix_local']
         else:
             bone.matrix = bone_up_Y @ mdb_bone['matrix_local']
@@ -699,94 +454,160 @@ def load(operator, context, filepath='', **kwargs):
         bone['normalized_bone_flag'] = mdb_bone['normalized_bone_flag']
         bone['bounds_half_size'] = mdb_bone['bounds_half_size']
         bone['bounds_center'] = mdb_bone['bounds_center']
-        # Add bone to bone list
-        bones.append(bone)
+        created_bones.append(bone)
+
     bpy.ops.object.mode_set(mode='OBJECT')
+    return armature_object
 
-    # Add meshes
-    for object in mdb['objects']:
-        name = object['name']
-        empty = bpy.data.objects.new(name, None)
-        empty['mdb_name'] = name
-        context.scene.collection.objects.link(empty)
-        for mdb_mesh in object['meshes']:
-            vertices = mdb_mesh['vertices']
 
-            # Read indices
-            faces = []
-            indices = mdb_mesh['indices']
-            for i in range(0, len(indices), 3):
-                faces.append((indices[i+0], indices[i+1], indices[i+2]))
+def create_mesh_geometry(mesh, mdb_mesh):
+    vertices = mdb_mesh['vertices']
+    faces = [
+        tuple(mdb_mesh['indices'][index:index + 3])
+        for index in range(0, len(mdb_mesh['indices']), 3)
+    ]
+    positions = [
+        (
+            vertex['position0'][0],
+            -vertex['position0'][2],
+            vertex['position0'][1],
+        )
+        for vertex in vertices
+    ]
+    mesh.from_pydata(positions, [], faces)
+    mesh.polygons.foreach_set('use_smooth', (True,) * len(faces))
 
-            # Read vertices
-            vertex = []
-            for vert in vertices:
-                x = vert['position0'][0]
-                y = vert['position0'][1]
-                z = vert['position0'][2]
-                vertex.append((x, -z, y))
 
-            # Add basic mesh
-            mesh = bpy.data.meshes.new('%s_Data' % name)
-            mesh_obj = bpy.data.objects.new(name, mesh)
-            mesh_obj.data = mesh
+def apply_mesh_normals(mesh, vertices, object_name):
+    if not vertices or 'normal0' not in vertices[0]:
+        print(f'No normals found for mesh {object_name}')
+        return
 
-            mesh.from_pydata(vertex, [], faces)
-            mesh.polygons.foreach_set('use_smooth', (True,)*len(faces))
+    normals = []
+    for vertex in vertices:
+        normal = vertex['normal0'].astype(float)
+        magnitude = np.sqrt(sum(component * component for component in normal[:3]))
+        if magnitude > 0:
+            normal /= magnitude
+            normals.append((normal[0], -normal[2], normal[1]))
+        else:
+            normals.append((0.0, 0.0, 0.0))
+    mesh.normals_split_custom_set_from_vertices(normals)
+    if bpy.app.version < (4, 1, 0):
+        mesh.use_auto_smooth = True
 
-            # Read normals
-            if 'normal0' in vertices[0]:
-                normals = []
-                for vert in vertices:
-                    normal = vert['normal0'].astype(float)
-                    magnitude = np.sqrt(normal[0]*normal[0] + normal[1]*normal[1] + normal[2]*normal[2])
-                    if magnitude > 0:
-                        normal /= magnitude
-                        x = normal[0]
-                        y = normal[1]
-                        z = normal[2]
-                        normals.append((x, -z, y))
-                    else:
-                        # print('Warning: A normal was undefined, blame Sandlot')
-                        normals.append((0.0, 0.0, 0.0))
-                mesh.normals_split_custom_set_from_vertices(normals)
-                if bpy.app.version < (4, 1, 0):
-                    mesh.use_auto_smooth = True  # Enable custom normals
-            else:
-                print("No normals found for mesh " + name)
 
-            # Add UV maps
-            for i in range(4):
-                coordstr = 'texcoord' + str(i)
-                if coordstr in vertices[0]:
-                    uvmap = mesh.uv_layers.new(name='UVMap' + ('' if i == 0 else str(i+1)))
-                    for face in mesh.polygons:
-                        for vert_idx, loop_idx in zip(face.vertices, face.loop_indices):
-                            texcoord = vertices[vert_idx][coordstr]
-                            uvmap.data[loop_idx].uv[0] = texcoord[0]
-                            uvmap.data[loop_idx].uv[1] = 1.0 - texcoord[1]
+def apply_mesh_uv_maps(mesh, vertices):
+    if not vertices:
+        return
+    for channel in range(4):
+        coordinate_key = f'texcoord{channel}'
+        if coordinate_key not in vertices[0]:
+            continue
+        uv_map = mesh.uv_layers.new(
+            name='UVMap' + ('' if channel == 0 else str(channel + 1)),
+        )
+        for face in mesh.polygons:
+            for vertex_index, loop_index in zip(
+                face.vertices,
+                face.loop_indices,
+            ):
+                texcoord = vertices[vertex_index][coordinate_key]
+                uv_map.data[loop_index].uv[0] = texcoord[0]
+                uv_map.data[loop_index].uv[1] = 1.0 - texcoord[1]
 
-            # Add vertex groups
-            if 'blendweight0' in vertices[0]:
-                groups = []
-                for n in range(len(mdb['bones'])):
-                    groups.append(mesh_obj.vertex_groups.new(name=mdb['bones'][n]['name']))
-                for i, vert in enumerate(vertices):
-                    for n in range(4):
-                        if vert['blendweight0'][n] != 0:
-                            groups[vert['blendindices0'][n]].add([i], vert['blendweight0'][n], 'ADD')
-            else:
-                print("No blend weights found for mesh " + name)
 
-            mod = mesh_obj.modifiers.new("Armature", 'ARMATURE')
-            mod.object = armature_obj
+def apply_vertex_groups(mesh_object, vertices, mdb_bones, object_name):
+    if not vertices or 'blendweight0' not in vertices[0]:
+        print(f'No blend weights found for mesh {object_name}')
+        return
 
-            # Assign material
-            if mdb_mesh['material_index'] != -1:
-                mesh.materials.append(materials[mdb_mesh['material_index']])
+    groups = [
+        mesh_object.vertex_groups.new(name=bone['name'])
+        for bone in mdb_bones
+    ]
+    for vertex_index, vertex in enumerate(vertices):
+        for influence_index in range(4):
+            weight = vertex['blendweight0'][influence_index]
+            if weight == 0:
+                continue
+            bone_index = vertex['blendindices0'][influence_index]
+            groups[bone_index].add([vertex_index], weight, 'ADD')
 
-            mesh.update()
 
-            context.scene.collection.objects.link(mesh_obj)
-            mesh_obj.parent = empty
+def create_mesh_object(
+    context,
+    mdb,
+    mdb_object,
+    mdb_mesh,
+    materials,
+    armature_object,
+    container,
+):
+    object_name = mdb_object['name']
+    vertices = mdb_mesh['vertices']
+    mesh = bpy.data.meshes.new(f'{object_name}_Data')
+    mesh_object = bpy.data.objects.new(object_name, mesh)
+    create_mesh_geometry(mesh, mdb_mesh)
+    apply_mesh_normals(mesh, vertices, object_name)
+    apply_mesh_uv_maps(mesh, vertices)
+    apply_vertex_groups(mesh_object, vertices, mdb['bones'], object_name)
+
+    armature_modifier = mesh_object.modifiers.new('Armature', 'ARMATURE')
+    armature_modifier.object = armature_object
+    if mdb_mesh['material_index'] != -1:
+        mesh.materials.append(materials[mdb_mesh['material_index']])
+
+    mesh.update()
+    context.scene.collection.objects.link(mesh_object)
+    mesh_object.parent = container
+    return mesh_object
+
+
+def create_mesh_objects(context, mdb, materials, armature_object):
+    for mdb_object in mdb['objects']:
+        object_name = mdb_object['name']
+        container = bpy.data.objects.new(object_name, None)
+        container['mdb_name'] = object_name
+        context.scene.collection.objects.link(container)
+        for mdb_mesh in mdb_object['meshes']:
+            create_mesh_object(
+                context,
+                mdb,
+                mdb_object,
+                mdb_mesh,
+                materials,
+                armature_object,
+                container,
+            )
+
+
+# Main function
+def load(operator, context, filepath='', **kwargs):
+    del kwargs
+    settings = ImportSettings(
+        ignore_errors=operator.option_ignore_errors,
+        override_version=operator.option_override_version,
+    )
+    try:
+        with open(filepath, 'rb') as stream:
+            mdb = parse_mdb(
+                stream,
+                override_version=settings.override_version,
+            )
+    except (OSError, MdbFormatError) as error:
+        if hasattr(operator, 'report'):
+            operator.report({'ERROR'}, str(error))
+        print(f'ERROR: {error}')
+        return {'CANCELLED'}
+
+    if bpy.ops.object.mode_set.poll():
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+    ensure_normal_unswizzle_group()
+    materials = create_materials(mdb, filepath, settings.ignore_errors)
+
+    armature_obj = create_armature(mdb, filepath, context)
+
+    create_mesh_objects(context, mdb, materials, armature_obj)
     return {'FINISHED'}

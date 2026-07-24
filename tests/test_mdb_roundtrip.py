@@ -47,7 +47,6 @@ def load_material_modules():
 
 
 IMPORT_MDB, EXPORT_MDB = load_material_modules()
-IMPORT_MDB.override_version = 0
 
 
 def export_material(parsed_material):

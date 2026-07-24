@@ -4,47 +4,41 @@
 import bpy
 import json
 import mathutils
-import numpy as np
 import os
-import struct
+from dataclasses import dataclass, field
 
-gameVersion = 0
+from .mdb_format import (
+    BONE_METADATA_PROPERTIES,
+    EDF5_VERSION,
+    EDF6_VERSION,
+    MATERIAL_METADATA_PROPERTIES,
+    TEXTURE_METADATA_PROPERTIES,
+    VERTEX_TYPE_FLOAT2,
+    VERTEX_TYPE_FLOAT3,
+    VERTEX_TYPE_FLOAT4,
+    VERTEX_TYPE_HALF4,
+    VERTEX_TYPE_UBYTE4,
+)
+from .mdb_writer import (
+    rewrite_offset,
+    write_ascii_strings as write_ascii_string,
+    write_bone_data,
+    write_header,
+    write_indexed_strings,
+    write_material_data,
+    write_mdb,
+    write_mesh_data,
+    write_object_data,
+    write_texture_data,
+    write_utf16_strings,
+    write_vertex_data,
+)
+
 # Original model is Y UP, but blender is Z UP by default, we convert that here.
 bone_up_Y = mathutils.Matrix(((1.0, 0.0, 0.0, 0.0),
                               (0.0, 0.0, -1.0, 0.0),
                               (0.0, 1.0, 0.0, 0.0),
                               (0.0, 0.0, 0.0, 1.0)))
-
-def write_header(file, version, names, bones, objects, materials, textures):
-    file.write(b'MDB0')
-    file.write(struct.pack('I', version))  # Version
-    
-    # Name Table Size and offset
-    name_length = len(names)
-    file.write(struct.pack('I', name_length))
-    file.write(struct.pack('I', 0x30)) # fixed end of header
-    
-    # Bone count and offset
-    bone_length = len(bones)
-    file.write(struct.pack('I', bone_length))
-    boneOffset = 0x30 + name_length * 0x04
-    file.write(struct.pack('I', boneOffset))
-    
-    # Object count and offset
-    objects_length = len(objects)
-    file.write(struct.pack('I', objects_length))
-    file.write(struct.pack('I', 0))
-    
-    # Material count and offset
-    materials_length = len(materials)
-    file.write(struct.pack('I', materials_length))
-    file.write(struct.pack('I', 0))
-    
-    # Texture count and offset
-    textures_length = len(textures)
-    file.write(struct.pack('I', textures_length))
-    file.write(struct.pack('I', 0))
-
 
 def get_unique_names():
     names_set = set()
@@ -168,26 +162,6 @@ def get_bone_data(names):
     return bones
 
 
-# Writes all bone data, total size per bone 0xC0 (192)
-def write_bone_data(f, bones):
-    for bone in bones:
-        f.write(struct.pack('I', bone['index']))
-        f.write(struct.pack('i', bone['parent']))
-        f.write(struct.pack('i', bone['next_sibling']))
-        f.write(struct.pack('i', bone['first_child']))
-        f.write(struct.pack('I', bone['name_index']))
-        f.write(struct.pack('I', bone['child_count']))
-        f.write(struct.pack('B', bone['participation_metadata']))
-        f.write(struct.pack('b', bone['semantic_role']))
-        f.write(struct.pack('B', bone['normalized_bone_flag']))
-        f.write(bytes(5))  # Reserved/alignment
-        # Matrices
-        f.write(struct.pack('16f', *bone['local_matrix']))
-        f.write(struct.pack('16f', *bone['inverse_bind_matrix']))
-        f.write(struct.pack('4f', *bone['bounds_half_size']))
-        f.write(struct.pack('4f', *bone['bounds_center']))
-
-
 def get_textures():
     textures = []
 
@@ -216,29 +190,6 @@ def get_textures():
                     'filename': node['mdb_texture_filename'],
                 }
     return textures
-
-
-# Writes all texture data, total size per texture 0x10 (16)
-def write_texture_data(file, textures, utf16_strings):
-    for index, texture in enumerate(textures):
-        base_pos = file.tell()
-        # Index
-        file.write(struct.pack('I', texture.get('index', index)))
-        # Texture name and filename offset placeholders
-        utf16_strings.append({
-            'string': texture['name'],
-            'base_pos': base_pos,
-            'write_pos': file.tell()
-        })
-        file.write(bytes([0x00]) * 4)
-        utf16_strings.append({
-            'string': texture['filename'],
-            'base_pos': base_pos,
-            'write_pos': file.tell()
-        })
-        file.write(bytes([0x00]) * 4)
-        # 4 empty bytes at the end
-        file.write(bytes([0x00]) * 4)
 
 
 def get_materials(indexed_strings):
@@ -338,84 +289,8 @@ def get_preserved_texture(image_node):
     }
 
 
-# Writes all material data, total size per material 0x20 (32)
-def write_material_data(file, materials, ascii_strings, utf16_strings):
-    # Write the main material data
-    for material in materials:
-        material['base_pos'] = file.tell()
-        file.write(struct.pack('H', material['index']))
-        file.write(struct.pack('b', material['draw_priority']))
-        file.write(struct.pack('B', material['render_queue_class']))
-        file.write(struct.pack('I', material['mat_name_index']))
-        utf16_strings.append({
-            'string': material['shader_name'],
-            'base_pos': material['base_pos'],
-            'write_pos': file.tell()
-        })
-        file.write(bytes([0x00]) * 4)
-        material['parameter_pos'] = file.tell()
-        file.write(struct.pack('i', 0))
-        file.write(struct.pack('i', material['parameter_count']))
-        material['texture_pos'] = file.tell()
-        file.write(struct.pack('i', 0))
-        file.write(struct.pack('i', material['texture_count']))
-        file.write(struct.pack('B', material['render_participation_flags']))
-        file.write(bytes(3))  # Reserved/alignment
-
-    # Write the parameter and texture data per material
-    for material in materials:
-        # Parameters
-        parameters_pos = file.tell()
-        rewrite_offset(file, material['parameter_pos'], parameters_pos, material['base_pos'])
-        for parameter in material['parameters']:
-            base_pos = file.tell()
-            file.write(struct.pack('6f', *parameter['values']))
-            parameter['name_pos'] = file.tell()
-            ascii_strings.append({
-                'string': parameter['name'],
-                'base_pos': base_pos,
-                'write_pos': file.tell()
-            })
-            file.write(struct.pack('i', 0))
-            file.write(struct.pack('B', parameter['type']))
-            file.write(struct.pack('B', parameter['size']))
-            file.write(bytes([0x00]) * 2)  # padding
-            
-        # Textures
-        textures_pos = file.tell()
-        rewrite_offset(file, material['texture_pos'], textures_pos, material['base_pos'])
-        for texture in material['textures']:
-            base_pos = file.tell()
-            file.write(struct.pack('i', texture['texture_index']))
-            ascii_strings.append({
-                'string': texture['type'],
-                'base_pos': base_pos,
-                'write_pos': file.tell()
-            })
-            file.write(struct.pack('i', 0))
-            file.write(struct.pack(
-                '<HhBBBbfff',
-                texture['sampler_flags'],
-                texture['filter'],
-                texture['address_u'],
-                texture['address_v'],
-                texture['address_w'],
-                texture['max_anisotropy'],
-                texture['min_lod'],
-                texture['max_lod'],
-                texture['lod_bias'],
-            ))
-
-# Seeks to the target, writes a file offset relative to the given base, returns to original position
-def rewrite_offset(file, rewrite_target, current_position, target_base_offset):
-    file.seek(rewrite_target)
-    offset = current_position - target_base_offset
-    file.write(struct.pack('I', offset))
-    file.seek(current_position)
-
-
 # Gathers all objects and their underlying data
-def get_objects(names, materials):
+def get_objects(names, materials, game_version):
     objects = []
     obj_index = 0
     for obj in iter_mdb_containers():
@@ -430,7 +305,9 @@ def get_objects(names, materials):
         object_data['mesh_count'] = len(mesh_objects)
         object_data['mesh_data'] = []
         for index, mesh_object in enumerate(mesh_objects):
-            object_data['mesh_data'].append(get_mesh_data(index, mesh_object, materials))
+            object_data['mesh_data'].append(
+                get_mesh_data(index, mesh_object, materials, game_version)
+            )
 
         obj_index += 1
         objects.append(object_data)
@@ -464,7 +341,7 @@ def split_vertices(mesh):
 
 
 # Gathers mesh info data
-def get_mesh_data(index, mesh_object, materials):
+def get_mesh_data(index, mesh_object, materials, game_version):
     mesh = mesh_object.data
     material_index = -1
     # Get the material used for this mesh
@@ -491,7 +368,9 @@ def get_mesh_data(index, mesh_object, materials):
         'material_index': material_index,
         'vertex_count': len(vertex_loop_pairs),
         'mesh_index': index,
-        'vertex_layouts': get_vertex_layouts(mesh, is_skinned, vertex_loop_pairs),
+        'vertex_layouts': get_vertex_layouts(
+            mesh, is_skinned, vertex_loop_pairs, game_version,
+        ),
         'index_count': len(indices),
         'indices': indices,
     }
@@ -504,14 +383,14 @@ def get_mesh_data(index, mesh_object, materials):
     return mesh_data
 
 # Build the interleaved vertex-layout channels and their values.
-def get_vertex_layouts(mesh, is_skinned, vertex_loop_pairs):
+def get_vertex_layouts(mesh, is_skinned, vertex_loop_pairs, game_version):
     vertex_layouts = []
     # Due to the nature of this data, it makes sense to just generate it as i saw in example files
     # We cannot be certain for each of these if they exist or not until proven otherwise in practice
     if is_skinned:
         blend_indices_data = {
             'name': 'BLENDINDICES',
-            'type': 21,
+            'type': VERTEX_TYPE_UBYTE4,
             'size': 4,
             'channel': 0,
             'data': []
@@ -519,7 +398,7 @@ def get_vertex_layouts(mesh, is_skinned, vertex_loop_pairs):
         vertex_layouts.append(blend_indices_data)
         blend_weight_data = {
             'name': 'BLENDWEIGHT',
-            'type': 1,
+            'type': VERTEX_TYPE_FLOAT4,
             'size': 16,
             'channel': 0,
             'data': []
@@ -527,7 +406,7 @@ def get_vertex_layouts(mesh, is_skinned, vertex_loop_pairs):
         vertex_layouts.append(blend_weight_data)
     binormal_data = {
         'name': 'binormal',
-        'type': 7,
+        'type': VERTEX_TYPE_HALF4,
         'size': 8,
         'channel': 0,
         'data': []
@@ -535,7 +414,7 @@ def get_vertex_layouts(mesh, is_skinned, vertex_loop_pairs):
     vertex_layouts.append(binormal_data)
     normal_data = {
         'name': 'normal',
-        'type': 7,
+        'type': VERTEX_TYPE_HALF4,
         'size': 8,
         'channel': 0,
         'data': []
@@ -543,7 +422,7 @@ def get_vertex_layouts(mesh, is_skinned, vertex_loop_pairs):
     vertex_layouts.append(normal_data)
     position_data = {
         'name': 'position',
-        'type': 7,
+        'type': VERTEX_TYPE_HALF4,
         'size': 8,
         'channel': 0,
         'data': []
@@ -551,7 +430,7 @@ def get_vertex_layouts(mesh, is_skinned, vertex_loop_pairs):
     vertex_layouts.append(position_data)
     tangent_data = {
         'name': 'tangent',
-        'type': 7,
+        'type': VERTEX_TYPE_HALF4,
         'size': 8,
         'channel': 0,
         'data': []
@@ -562,7 +441,7 @@ def get_vertex_layouts(mesh, is_skinned, vertex_loop_pairs):
     for channel, uv in enumerate(mesh.uv_layers):
         texcoord_data = {
             'name': 'texcoord',
-            'type': 12,
+            'type': VERTEX_TYPE_FLOAT2,
             'size': 8,
             'channel': channel,
             'data': []
@@ -571,7 +450,7 @@ def get_vertex_layouts(mesh, is_skinned, vertex_loop_pairs):
         vertex_layouts.append(texcoord_data)
 
     # Capitalize all the names in EDF6, as they seem to expect that
-    if gameVersion == 6:
+    if game_version == 6:
         for data in uv_data:
             data['name'] = data['name'].upper()
     
@@ -614,138 +493,6 @@ def get_vertex_layouts(mesh, is_skinned, vertex_loop_pairs):
         offset += layout['size']
     return vertex_layouts
 
-
-def write_object_data(file, objects, ascii_strings):
-    for object in objects:
-        # Write object info
-        object['base_pos'] = file.tell()
-        file.write(struct.pack('I', object['index']))
-        file.write(struct.pack('i', object['name_index']))
-        file.write(struct.pack('I', object['mesh_count']))
-        object['mesh_pos'] = file.tell()
-        file.write(struct.pack('I', 0))
-    for object in objects:
-        # Replace mesh_pos in object data
-        rewrite_offset(file, object['mesh_pos'], file.tell(), object['base_pos'])
-        write_mesh_data(file, object, ascii_strings)
-    for object in objects:
-        write_vertex_data(file, object)
-
-
-def write_mesh_data(file, object, ascii_strings):
-    # Write Mesh info
-    for mesh in object['mesh_data']:
-        mesh['base_pos'] = file.tell()
-        file.write(bytes([0x00]))  # Triangle-list topology
-        file.write(struct.pack('B', mesh['is_skinned']))
-        file.write(struct.pack('B', mesh['bone_influence_count']))
-        file.write(bytes([0x00]))  # Alignment
-        file.write(struct.pack('i', mesh['material_index']))
-        file.write(struct.pack('I', 0))  # Reserved/ignored by the game loader
-        mesh['vertex_layout_pos'] = file.tell()
-        file.write(struct.pack('i', 0))
-        file.write(struct.pack('H', mesh['vertex_stride']))
-        file.write(struct.pack('H', mesh['layout_count']))
-        file.write(struct.pack('I', mesh['vertex_count']))
-        file.write(struct.pack('I', mesh['mesh_index']))
-        mesh['vertex_data_pos'] = file.tell()
-        file.write(struct.pack('i', 0))
-        file.write(struct.pack('I', mesh['index_count']))
-        mesh['index_data_pos'] = file.tell()
-        file.write(struct.pack('i', 0))
-
-    # Write Vertex Layout info
-    for mesh in object['mesh_data']:
-        # Replace vertex_layout_pos in mesh data
-        rewrite_offset(file, mesh['vertex_layout_pos'], file.tell(), mesh['base_pos'])
-        for layout in mesh['vertex_layouts']:
-            base_pos = file.tell()
-            file.write(struct.pack('I', layout['type']))
-            file.write(struct.pack('I', layout['offset']))
-            file.write(struct.pack('I', layout['channel']))
-            ascii_strings.append({
-                'string': layout['name'],
-                'base_pos': base_pos,
-                'write_pos': file.tell()
-            })
-            file.write(struct.pack('I', 0))
-
-def write_vertex_data(file, object):
-    # Write all indices
-    for mesh in object['mesh_data']:
-        # Replace index_data_pos in mesh data
-        rewrite_offset(file, mesh['index_data_pos'], file.tell(), mesh['base_pos'])
-        for index in mesh['indices']:
-            file.write(struct.pack('H', index))
-    # Write all Vertex data
-    for mesh in object['mesh_data']:
-        # Replace vertex_data_pos in mesh data
-        rewrite_offset(file, mesh['vertex_data_pos'], file.tell(), mesh['base_pos'])
-        for i in range(mesh['vertex_count']):
-            for layout in mesh['vertex_layouts']:
-                type = layout['type']
-                vert_data = layout['data'][i]
-                if type == 1: #float4
-                    file.write(struct.pack('4f', *vert_data))
-                elif type == 4: #float3
-                    file.write(struct.pack('3f', *vert_data))
-                elif type == 7: #half4
-                    half_array = np.array(vert_data, dtype=np.float32).astype(np.half)
-                    file.write(half_array.tobytes())
-                elif type == 12: #float2
-                    file.write(struct.pack('2f', *vert_data))
-                elif type == 21: #ubyte4
-                    file.write(struct.pack('4B', *vert_data))
-                else:
-                    print("Unknown vertex layout type: " + str(type))
-
-def write_ascii_string(file, ascii_strings):
-    written_strings = {}
-    # Write all the strings and store their positions
-    for string_data in ascii_strings:
-        string = string_data['string'].encode('ascii')
-        if string not in written_strings:
-            written_strings[string] = file.tell()
-            file.write(string)
-            file.write(bytes([0x00]))  # Terminate string
-    # Write all the positions away and return to starting position
-    last_pos = file.tell()
-    for string_data in ascii_strings:
-        string = string_data['string'].encode('ascii')
-        string_pos = written_strings[string]
-        rewrite_offset(file, string_data['write_pos'], string_pos, string_data['base_pos'])
-    file.seek(last_pos)
-
-
-def write_indexed_strings(file, indexed_strings):
-    indexes = []
-    for index, raw_string in enumerate(indexed_strings):
-        indexes.append(file.tell())
-        file.write(raw_string.encode('UTF-16LE'))
-        file.write(bytes([0x00, 0x00]))  # Terminate string
-    original_pos = file.tell()
-    file.seek(0x30)  # Offset to the start of the name table, fixed location.
-    for index in indexes:
-        file.write(struct.pack('I', index - file.tell()))
-    file.seek(original_pos)
-
-
-def write_utf16_strings(file, utf16_strings):
-    written_strings = {}
-    # Write all the strings and store their positions
-    for string_data in utf16_strings:
-        string = string_data['string'].encode('UTF-16LE')
-        if string not in written_strings:
-            written_strings[string] = file.tell()
-            file.write(string)
-            file.write(bytes([0x00, 0x00]))  # Terminate string
-    # Write all the positions away and return to starting position
-    last_pos = file.tell()
-    for string_data in utf16_strings:
-        string = string_data['string'].encode('UTF-16LE')
-        string_pos = written_strings[string]
-        rewrite_offset(file, string_data['write_pos'], string_pos, string_data['base_pos'])
-    file.seek(last_pos)
 
 def sort_objects_by_name_order(array_to_sort, reference_array):
     # Create a dictionary to store the index of each object's name in the reference array
@@ -870,27 +617,11 @@ def find_incomplete_mdb_metadata():
     missing = []
     if len(bpy.data.armatures) == 0:
         return ['armature: missing']
-    required_bone_properties = (
-        'participation_metadata',
-        'semantic_role',
-        'normalized_bone_flag',
-        'bounds_half_size',
-        'bounds_center',
-    )
     for bone in bpy.data.armatures[0].bones:
-        absent = [name for name in required_bone_properties if name not in bone]
+        absent = [name for name in BONE_METADATA_PROPERTIES if name not in bone]
         if absent:
             missing.append(f"bone '{bone.name}': {', '.join(absent)}")
 
-    required_material_properties = (
-        'mdb_material_index',
-        'mdb_name',
-        'mdb_shader_name',
-        'mdb_texture_table',
-        'draw_priority',
-        'render_queue_class',
-        'render_participation_flags',
-    )
     assigned_materials = set(iter_assigned_materials())
     for material in assigned_materials:
         if not material.use_nodes:
@@ -909,30 +640,18 @@ def find_incomplete_mdb_metadata():
         )
         if shader_node is None:
             continue
-        absent = [name for name in required_material_properties if name not in material]
+        absent = [
+            name for name in MATERIAL_METADATA_PROPERTIES
+            if name not in material
+        ]
         if 'mdb_parameters' not in shader_node:
             absent.append('shader node mdb_parameters')
-        required_texture_properties = (
-            'mdb_texture_index',
-            'mdb_texture_name',
-            'mdb_texture_filename',
-            'mdb_texture_slot',
-            'mdb_sampler_flags',
-            'mdb_filter',
-            'mdb_address_u',
-            'mdb_address_v',
-            'mdb_address_w',
-            'mdb_max_anisotropy',
-            'mdb_min_lod',
-            'mdb_max_lod',
-            'mdb_lod_bias',
-        )
         for texture_node in material.node_tree.nodes:
             if texture_node.type != 'TEX_IMAGE' or 'mdb_texture_binding' not in texture_node:
                 continue
             absent.extend(
                 f"texture node {name}"
-                for name in required_texture_properties
+                for name in TEXTURE_METADATA_PROPERTIES
                 if name not in texture_node
             )
         if absent:
@@ -944,10 +663,44 @@ def find_incomplete_mdb_metadata():
     return missing
 
 
+@dataclass
+class ExportData:
+    game_version: int
+    file_version: int
+    names: list
+    bones: list
+    textures: list
+    materials: list
+    objects: list
+    ascii_strings: list = field(default_factory=list)
+    utf16_strings: list = field(default_factory=list)
+
+
+def build_export_data(game_version):
+    names = get_unique_names()
+    bones = get_bone_data(names)
+    textures = get_textures()
+    materials = get_materials(names)
+    objects = get_objects(names, materials, game_version)
+    recompute_bone_bounding_boxes(bones, objects)
+    objects = sort_objects_by_name_order(objects, bones)
+    file_version = EDF5_VERSION if game_version == 5 else EDF6_VERSION
+    return ExportData(
+        game_version=game_version,
+        file_version=file_version,
+        names=names,
+        bones=bones,
+        textures=textures,
+        materials=materials,
+        objects=objects,
+    )
+
+
 def save(operator, context, filepath="", version=0, **kwargs):
-    assert version != 0
-    global gameVersion
-    gameVersion = version
+    del context, kwargs
+    if version not in (5, 6):
+        report_export(operator, 'ERROR', f'Unsupported export version {version}.')
+        return {'CANCELLED'}
     non_triangular = find_non_triangulated_meshes()
     if non_triangular:
         message = (
@@ -973,46 +726,8 @@ def save(operator, context, filepath="", version=0, **kwargs):
             'Vertices with more than four bone influences will use their four '
             'strongest influences, normalized to a total weight of 1.',
         )
-    # Get the name table
-    indexed_strings = get_unique_names()
-    ascii_strings = []
-    utf16_strings = []
-    # Gather all the different parts we need
-    bones = get_bone_data(indexed_strings)
-    texture_names = get_textures()
-    materials = get_materials(indexed_strings)
-    objects = get_objects(indexed_strings, materials)
-    recompute_bone_bounding_boxes(bones, objects)
-
-    # Sort all the objects by bone name order
-    objects = sort_objects_by_name_order(objects, bones)
+    data = build_export_data(version)
 
     with open(filepath, 'wb') as file:
-        # Write header
-        hexVersion = 0x00
-        if version == 5:
-            hexVersion = 0x14
-        if version == 6:
-            hexVersion = 0x20
-        write_header(file, hexVersion, indexed_strings, bones, objects, materials, texture_names)
-        # Write name pointers placeholder
-        file.write(bytes([0x01, 0x02, 0x03, 0x04]) * len(indexed_strings))
-        # Write Bone Data
-        write_bone_data(file, bones)
-        # Write header Texture offset
-        rewrite_offset(file, 0x2C, file.tell(), 0x00)
-        # Write Texture data
-        write_texture_data(file, texture_names, utf16_strings)
-        # Write header Material offset
-        rewrite_offset(file, 0x24, file.tell(), 0x00)
-        # Write Material data
-        write_material_data(file, materials, ascii_strings, utf16_strings)
-        # Write header Object offset
-        rewrite_offset(file, 0x1C, file.tell(), 0x00)
-        # Write Object data
-        write_object_data(file, objects, ascii_strings)
-        # Write all strings
-        write_ascii_string(file, ascii_strings)
-        write_indexed_strings(file, indexed_strings)
-        write_utf16_strings(file, utf16_strings)
+        write_mdb(file, data)
     return {'FINISHED'}
