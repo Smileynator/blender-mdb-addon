@@ -2,6 +2,7 @@
 
 import os
 import json
+import uuid
 import bpy
 import mathutils
 import numpy as np
@@ -9,6 +10,8 @@ import numpy as np
 from dataclasses import dataclass
 from .mdb_format import (
     MdbFormatError,
+    SOURCE_ID_PROPERTY,
+    SOURCE_PATH_PROPERTY,
     read_uint,
 )
 from .mdb_parser import (
@@ -348,8 +351,22 @@ def add_material_texture(
     )
 
 
-def create_material(mdb, mdb_material, filepath, texture_cache, ignore_errors):
+def tag_mdb_source(data_block, source_id, source_path):
+    data_block[SOURCE_ID_PROPERTY] = source_id
+    data_block[SOURCE_PATH_PROPERTY] = source_path
+
+
+def create_material(
+    mdb,
+    mdb_material,
+    filepath,
+    texture_cache,
+    ignore_errors,
+    source_id,
+    source_path,
+):
     material = bpy.data.materials.new(mdb_material['name'])
+    tag_mdb_source(material, source_id, source_path)
     material['draw_priority'] = mdb_material['draw_priority']
     material['render_queue_class'] = mdb_material['render_queue_class']
     material['render_participation_flags'] = (
@@ -415,7 +432,7 @@ def create_material(mdb, mdb_material, filepath, texture_cache, ignore_errors):
     return material
 
 
-def create_materials(mdb, filepath, ignore_errors):
+def create_materials(mdb, filepath, ignore_errors, source_id, source_path):
     texture_cache = {}
     return [
         create_material(
@@ -424,17 +441,21 @@ def create_materials(mdb, filepath, ignore_errors):
             filepath,
             texture_cache,
             ignore_errors,
+            source_id,
+            source_path,
         )
         for mdb_material in mdb['materials']
     ]
 
 
-def create_armature(mdb, filepath, context):
+def create_armature(mdb, filepath, context, source_id, source_path):
     armature = bpy.data.armatures.new('Armature')
+    tag_mdb_source(armature, source_id, source_path)
     armature_object = bpy.data.objects.new(
         os.path.splitext(os.path.basename(filepath))[0],
         armature,
     )
+    tag_mdb_source(armature_object, source_id, source_path)
     context.scene.collection.objects.link(armature_object)
     context.view_layer.objects.active = armature_object
     bpy.ops.object.mode_set(mode='EDIT', toggle=False)
@@ -543,11 +564,15 @@ def create_mesh_object(
     materials,
     armature_object,
     container,
+    source_id,
+    source_path,
 ):
     object_name = mdb_object['name']
     vertices = mdb_mesh['vertices']
     mesh = bpy.data.meshes.new(f'{object_name}_Data')
+    tag_mdb_source(mesh, source_id, source_path)
     mesh_object = bpy.data.objects.new(object_name, mesh)
+    tag_mdb_source(mesh_object, source_id, source_path)
     create_mesh_geometry(mesh, mdb_mesh)
     apply_mesh_normals(mesh, vertices, object_name)
     apply_mesh_uv_maps(mesh, vertices)
@@ -564,10 +589,18 @@ def create_mesh_object(
     return mesh_object
 
 
-def create_mesh_objects(context, mdb, materials, armature_object):
+def create_mesh_objects(
+    context,
+    mdb,
+    materials,
+    armature_object,
+    source_id,
+    source_path,
+):
     for mdb_object in mdb['objects']:
         object_name = mdb_object['name']
         container = bpy.data.objects.new(object_name, None)
+        tag_mdb_source(container, source_id, source_path)
         container['mdb_name'] = object_name
         context.scene.collection.objects.link(container)
         for mdb_mesh in mdb_object['meshes']:
@@ -579,6 +612,8 @@ def create_mesh_objects(context, mdb, materials, armature_object):
                 materials,
                 armature_object,
                 container,
+                source_id,
+                source_path,
             )
 
 
@@ -604,10 +639,33 @@ def load(operator, context, filepath='', **kwargs):
     if bpy.ops.object.mode_set.poll():
         bpy.ops.object.mode_set(mode="OBJECT")
 
+    source_id = uuid.uuid4().hex
+    source_path = os.path.abspath(filepath)
     ensure_normal_unswizzle_group()
-    materials = create_materials(mdb, filepath, settings.ignore_errors)
+    materials = create_materials(
+        mdb,
+        filepath,
+        settings.ignore_errors,
+        source_id,
+        source_path,
+    )
 
-    armature_obj = create_armature(mdb, filepath, context)
+    armature_obj = create_armature(
+        mdb,
+        filepath,
+        context,
+        source_id,
+        source_path,
+    )
 
-    create_mesh_objects(context, mdb, materials, armature_obj)
+    create_mesh_objects(
+        context,
+        mdb,
+        materials,
+        armature_obj,
+        source_id,
+        source_path,
+    )
+    context.view_layer.objects.active = armature_obj
+    armature_obj.select_set(True)
     return {'FINISHED'}

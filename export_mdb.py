@@ -12,6 +12,8 @@ from .mdb_format import (
     EDF5_VERSION,
     EDF6_VERSION,
     MATERIAL_METADATA_PROPERTIES,
+    SOURCE_ID_PROPERTY,
+    SOURCE_PATH_PROPERTY,
     TEXTURE_METADATA_PROPERTIES,
     VERTEX_TYPE_FLOAT2,
     VERTEX_TYPE_FLOAT3,
@@ -40,7 +42,46 @@ bone_up_Y = mathutils.Matrix(((1.0, 0.0, 0.0, 0.0),
                               (0.0, 1.0, 0.0, 0.0),
                               (0.0, 0.0, 0.0, 1.0)))
 
-def get_unique_names():
+
+def source_id_of(data_block):
+    if data_block is None:
+        return None
+    source_id = data_block.get(SOURCE_ID_PROPERTY)
+    if source_id:
+        return source_id
+    return source_id_of(getattr(data_block, 'data', None))
+
+
+def get_export_source_id(context):
+    active_source_id = source_id_of(context.active_object)
+    source_ids = {
+        source_id_of(obj)
+        for obj in bpy.data.objects
+        if source_id_of(obj)
+    }
+    if active_source_id:
+        return active_source_id, None
+    if len(source_ids) == 1:
+        return source_ids.pop(), None
+    if not source_ids:
+        return None, (
+            'This scene has no current MDB source association. Re-import the '
+            'source MDB with this add-on version.'
+        )
+    return None, (
+        'Multiple imported MDB models are present. Select an object belonging '
+        'to the model you want to export.'
+    )
+
+
+def get_source_armature(source_id):
+    for obj in bpy.data.objects:
+        if obj.type == 'ARMATURE' and source_id_of(obj) == source_id:
+            return obj.data
+    return None
+
+
+def get_unique_names(source_id, armature):
     names_set = set()
     names_list = []
     # Note, bones come first, and in the exact order
