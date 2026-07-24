@@ -54,9 +54,9 @@ def export_material(parsed_material):
     return {
         "index": parsed_material["index"],
         "mat_name_index": 0,
-        "render_priority": parsed_material["render_priority"],
-        "render_layer": parsed_material["render_layer"],
-        "render_type": parsed_material["render_type"],
+        "draw_priority": parsed_material["draw_priority"],
+        "render_queue_class": parsed_material["render_queue_class"],
+        "render_participation_flags": parsed_material["render_participation_flags"],
         "shader_name": parsed_material["shader"],
         "parameters": [
             {
@@ -103,7 +103,42 @@ def parse_fixture_materials(source):
     return IMPORT_MDB.parse_materials(source, material_count, material_offset, names)
 
 
-class MaterialRoundTripTests(unittest.TestCase):
+def parse_fixture_bones(source):
+    source.seek(8)
+    name_count = IMPORT_MDB.read_uint(source)
+    name_offset = IMPORT_MDB.read_uint(source)
+    bone_count = IMPORT_MDB.read_uint(source)
+    bone_offset = IMPORT_MDB.read_uint(source)
+    names = IMPORT_MDB.parse_names(source, name_count, name_offset)
+    return names, IMPORT_MDB.parse_bones(source, bone_count, bone_offset, names)
+
+
+def export_bone(parsed_bone, names):
+    def file_order(matrix):
+        return [
+            matrix[x][y]
+            for y in range(4)
+            for x in range(4)
+        ]
+
+    return {
+        "index": parsed_bone["index"],
+        "parent": parsed_bone["parent"],
+        "next_sibling": parsed_bone["next_sibling"],
+        "first_child": parsed_bone["first_child"],
+        "name_index": names.index(parsed_bone["name"]),
+        "child_count": parsed_bone["child_count"],
+        "participation_metadata": parsed_bone["participation_metadata"],
+        "semantic_role": parsed_bone["semantic_role"],
+        "normalized_bone_flag": parsed_bone["normalized_bone_flag"],
+        "local_matrix": file_order(parsed_bone["matrix_local"]),
+        "inverse_bind_matrix": file_order(parsed_bone["matrix_invbind"]),
+        "bounds_half_size": parsed_bone["bounds_half_size"],
+        "bounds_center": parsed_bone["bounds_center"],
+    }
+
+
+class MdbRoundTripTests(unittest.TestCase):
     fixtures = (
         FIXTURE_ROOT / "E503_FROG" / "MODEL" / "e503_frog.mdb",
         FIXTURE_ROOT / "E505_GENERATOR" / "MODEL" / "e505_generator.mdb",
@@ -142,6 +177,95 @@ class MaterialRoundTripTests(unittest.TestCase):
 
                 self.assert_materials_equal(parsed_materials, reparsed)
 
+    def test_fixture_bone_blocks_round_trip_without_field_loss(self):
+        missing = [fixture for fixture in self.fixtures if not fixture.exists()]
+        if missing:
+            self.skipTest(f"Optional local fixtures not found: {missing}")
+
+        for fixture in self.fixtures:
+            with self.subTest(fixture=fixture.name), fixture.open("rb") as source:
+                names, parsed_bones = parse_fixture_bones(source)
+                encoded = io.BytesIO()
+                EXPORT_MDB.write_bone_data(
+                    encoded,
+                    [export_bone(bone, names) for bone in parsed_bones],
+                )
+                encoded.seek(0)
+                reparsed = IMPORT_MDB.parse_bones(
+                    encoded,
+                    len(parsed_bones),
+                    0,
+                    names,
+                )
+
+                self.assertEqual(len(parsed_bones), len(reparsed))
+                for expected, actual in zip(parsed_bones, reparsed):
+                    for field in (
+                        "index",
+                        "parent",
+                        "next_sibling",
+                        "first_child",
+                        "name",
+                        "child_count",
+                        "participation_metadata",
+                        "semantic_role",
+                        "normalized_bone_flag",
+                    ):
+                        self.assertEqual(expected[field], actual[field])
+                    self.assertEqual(
+                        float_bits(expected["bounds_half_size"]),
+                        float_bits(actual["bounds_half_size"]),
+                    )
+                    self.assertEqual(
+                        float_bits(expected["bounds_center"]),
+                        float_bits(actual["bounds_center"]),
+                    )
+                    for matrix_name in ("matrix_local", "matrix_invbind"):
+                        expected_matrix = [
+                            expected[matrix_name][x][y]
+                            for y in range(4)
+                            for x in range(4)
+                        ]
+                        actual_matrix = [
+                            actual[matrix_name][x][y]
+                            for y in range(4)
+                            for x in range(4)
+                        ]
+                        self.assertEqual(
+                            float_bits(expected_matrix),
+                            float_bits(actual_matrix),
+                        )
+
+    def test_canonical_mesh_info_round_trip(self):
+        mesh = {
+            "is_skinned": 1,
+            "bone_influence_count": 4,
+            "material_index": 7,
+            "vertex_stride": 0,
+            "layout_count": 0,
+            "vertex_count": 0,
+            "mesh_index": 3,
+            "index_count": 0,
+            "vertex_layouts": [],
+        }
+        encoded = io.BytesIO()
+        EXPORT_MDB.write_mesh_data(
+            encoded,
+            {"mesh_data": [mesh]},
+            [],
+        )
+        encoded.seek(0)
+        reparsed = IMPORT_MDB.parse_meshes(encoded, 1, 0)[0]
+
+        self.assertEqual(reparsed["topology_selector"], 0)
+        self.assertEqual(reparsed["is_skinned"], 1)
+        self.assertEqual(reparsed["bone_influence_count"], 4)
+        self.assertEqual(reparsed["reserved_alignment"], 0)
+        self.assertEqual(reparsed["material_index"], 7)
+        self.assertEqual(reparsed["reserved_0x08"], 0)
+        self.assertEqual(reparsed["vertex_stride"], 0)
+        self.assertEqual(reparsed["mesh_index"], 3)
+
     def test_editing_a_visible_value_preserves_unrepresented_slots(self):
         parameter = {
             "name": "roughness",
@@ -178,25 +302,16 @@ class MaterialRoundTripTests(unittest.TestCase):
 
         self.assertEqual(float_bits(exported["values"][:4]), float_bits([0.1, 0.2, 0.3, 0.4]))
 
-    def test_legacy_vector_parameter_keeps_names_ending_in_x(self):
-        inputs = {
-            "index_x": types.SimpleNamespace(
-                name="index_x",
-                default_value=0.25,
-                type="VALUE",
-            ),
-            "index_y": types.SimpleNamespace(default_value=0.75),
-        }
-
-        exported = EXPORT_MDB.get_parameter(inputs, inputs["index_x"])
-
-        self.assertEqual(exported["name"], "index")
-        self.assertEqual(exported["values"][:2], [0.25, 0.75])
-
     def assert_materials_equal(self, expected_materials, actual_materials):
         self.assertEqual(len(expected_materials), len(actual_materials))
         for expected, actual in zip(expected_materials, actual_materials):
-            for field in ("index", "render_priority", "render_layer", "render_type", "shader"):
+            for field in (
+                "index",
+                "draw_priority",
+                "render_queue_class",
+                "render_participation_flags",
+                "shader",
+            ):
                 self.assertEqual(expected[field], actual[field])
 
             self.assertEqual(len(expected["params"]), len(actual["params"]))

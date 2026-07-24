@@ -42,7 +42,7 @@ def material_from_recipe(shader_name, recipe):
         "shader": shader_name,
         "params": parameters,
         "textures": textures,
-        "render_layer": 2 if shader_name.lower().endswith(("_alpha", "_clip", "_hair")) else 0,
+        "render_queue_class": 2 if shader_name.lower().endswith(("_alpha", "_clip", "_hair")) else 0,
     }
 
 

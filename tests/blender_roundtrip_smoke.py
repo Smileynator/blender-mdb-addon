@@ -94,7 +94,7 @@ def main():
         if {"normal", "damage_normal"} & texture_slots:
             assert bsdf.inputs["Normal"].is_linked
         if (
-            material["render_layer"] == 2
+            material["render_queue_class"] == 2
             and "albedo" in texture_slots
         ):
             assert bsdf.inputs["Alpha"].is_linked
@@ -106,19 +106,20 @@ def main():
         assert len(editing_notes) == 1
         assert editing_notes[0].text is not None
 
-    export_mdb.save(
+    result = export_mdb.save(
         object(),
         bpy.context,
         filepath=str(output_path),
         version=export_version,
     )
+    assert result == {"FINISHED"}
     assert output_path.exists()
     with output_path.open("rb") as exported:
         reparsed = import_mdb.parse_mdb(exported)
     for bone in reparsed["bones"]:
-        if bone["group"] != 0:
-            assert math.isclose(bone["unk6"], 1.0)
-            assert math.isclose(bone["unk10"], 1.0)
+        if bone["participation_metadata"] != 0:
+            assert math.isclose(bone["bounds_half_size"][3], 1.0)
+            assert math.isclose(bone["bounds_center"][3], 1.0)
 
 
 if __name__ == "__main__":

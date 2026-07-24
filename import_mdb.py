@@ -113,24 +113,16 @@ def parse_bones(f, count, offset, name_table):
         bone['first_child'] = read_int(f) # First Child index -1 for none.
         bone['name'] = name_table[read_uint(f)] # Bone name
         bone['child_count'] = read_uint(f) # Child bone count
-        bone['group'] = f.read(1)[0] # Unknown byte Control Group? generally low value 0=root, 1=???, 2=unskinnedBone, 3=skinnedbone
-        bone['unk1'] = f.read(1)[0] # Unknown byte value 0, 1, 2(camera aim) 4(aim point), 250-255 as values, groupings consistent between models but still unclear
-        bone['unk2'] = f.read(1)[0] == 1 # Bool, true if unk7 to 12 are used! Only false so far for empty/target nodes
-        f.read(5) # Always zero - 8 byte padding
+        bone['participation_metadata'] = f.read(1)[0]
+        bone['semantic_role'] = read_byte(f)
+        bone['normalized_bone_flag'] = f.read(1)[0] == 1
+        f.read(5)  # Reserved/alignment
 
         bone['matrix_local'] = read_matrix(f) # Transformation Matrix local
         bone['matrix_invbind'] = read_matrix(f) # Transformation Matrix Invert Bind Pose
 
-        # If one is set, the other is always set as well
-        bone['unk3'] = read_float(f)  # Float4 Contact positions? Set for "actual bones" but 0 for "aim point" bones?
-        bone['unk4'] = read_float(f)
-        bone['unk5'] = read_float(f)
-        bone['unk6'] = read_float(f)
-
-        bone['unk7'] = read_float(f)  # Unknown Float4? Set for "actual bones" but 0 for "aim point" bones?
-        bone['unk8'] = read_float(f)
-        bone['unk9'] = read_float(f)
-        bone['unk10'] = read_float(f)
+        bone['bounds_half_size'] = [read_float(f) for _ in range(4)]
+        bone['bounds_center'] = [read_float(f) for _ in range(4)]
         
         next = f.tell()
         assert next - base == 192
@@ -177,8 +169,8 @@ def parse_mat_param(f, count, offset):
         mat_param['val4'] = read_float(f)
         mat_param['val5'] = read_float(f)
         name = read_uint(f)
-        mat_param['type'] = f.read(1)[0] # Type (0 is value, 1 is X/Y, 2 is color, 4 is alpha color)
-        mat_param['size'] = f.read(1)[0] # Number of values used in type
+        mat_param['type'] = f.read(1)[0]  # 0=Float, 1=Vector2, 2=RGB, 3=RGBA
+        mat_param['size'] = f.read(1)[0]  # Component/value count
         f.read(2) # Always zero, padding
         next = f.tell()
         assert next - base == 32
@@ -227,15 +219,16 @@ def parse_materials(f, count, offset, name_table):
         material = {}
         base = f.tell()
         material['index'] = read_ushort(f)
-        material['render_priority'] = read_byte(f)
-        material['render_layer'] = f.read(1)[0]
+        material['draw_priority'] = read_byte(f)
+        material['render_queue_class'] = f.read(1)[0]
         material_name = read_uint(f)
         shader = read_uint(f)
         param_offset = read_uint(f)
         param_count = read_uint(f)
         txr_offset = read_uint(f)
         txr_count = read_uint(f)
-        material['render_type'] = read_uint(f)
+        material['render_participation_flags'] = f.read(1)[0]
+        f.read(3)  # Reserved/alignment
         next = f.tell()
         assert next - base == 32
 
@@ -280,7 +273,7 @@ def parse_indices(f, count, offset):
     return indices
 
 
-def parse_vertices(f, count, offset, layout, vertex_size):
+def parse_vertices(f, count, offset, layout, vertex_stride):
     vertices = []
     f.seek(offset)
     # For each vertices
@@ -307,7 +300,7 @@ def parse_vertices(f, count, offset, layout, vertex_size):
                 if j < len(layout) - 1:
                     f.seek(layout[j+1]['offset'] - elem['offset'])
                 else:
-                    f.seek(vertex_size - elem['offset'])
+                    f.seek(vertex_stride - elem['offset'])
             vertex[elem['name'].lower() + str(elem['channel'])] = array
         vertices.append(vertex)
     return vertices
@@ -319,26 +312,26 @@ def parse_meshes(f, count, offset):
     for i in range(count):
         mesh = {}
         base = f.tell()
-        mesh['unk0'] = f.read(1)[0]
-        mesh['skinned'] = f.read(1)[0]
-        mesh['bones'] = f.read(1)[0]
-        mesh['unk1'] = f.read(1)[0]
-        mesh['material'] = read_int(f)
-        mesh['material2'] = read_int(f)
+        mesh['topology_selector'] = f.read(1)[0]
+        mesh['is_skinned'] = f.read(1)[0]
+        mesh['bone_influence_count'] = read_byte(f)
+        mesh['reserved_alignment'] = f.read(1)[0]
+        mesh['material_index'] = read_int(f)
+        mesh['reserved_0x08'] = read_uint(f)
         layout_offset = read_uint(f)
-        mesh['vertex_size'] = read_ushort(f)
+        mesh['vertex_stride'] = read_ushort(f)
         layout_count = read_ushort(f)
         vertex_count = read_uint(f)
-        mesh['index'] = read_uint(f)
+        mesh['mesh_index'] = read_uint(f)
         vertex_offset = read_uint(f)
-        indice_count = read_uint(f)
-        indice_offset = read_uint(f)
+        index_count = read_uint(f)
+        index_offset = read_uint(f)
         next = f.tell()
         assert next - base == 40
 
         mesh['layout'] = parse_vertex_layout(f, layout_count, base+layout_offset)
-        mesh['indices'] = parse_indices(f, indice_count, base+indice_offset)
-        mesh['vertices'] = parse_vertices(f, vertex_count, base+vertex_offset, mesh['layout'], mesh['vertex_size'])
+        mesh['indices'] = parse_indices(f, index_count, base+index_offset)
+        mesh['vertices'] = parse_vertices(f, vertex_count, base+vertex_offset, mesh['layout'], mesh['vertex_stride'])
 
         f.seek(next)
         meshes.append(mesh)
@@ -538,9 +531,9 @@ def load(operator, context, filepath='', **kwargs):
         lshader = mdb_material['shader'].lower()
         material = bpy.data.materials.new(mdb_material['name'])
         # Custom properties
-        material['render_priority'] = mdb_material['render_priority']
-        material['render_layer'] = mdb_material['render_layer']
-        material['render_type'] = mdb_material['render_type']
+        material['draw_priority'] = mdb_material['draw_priority']
+        material['render_queue_class'] = mdb_material['render_queue_class']
+        material['render_participation_flags'] = mdb_material['render_participation_flags']
         material['mdb_name'] = mdb_material['name']
         
         if lshader.endswith('_alpha') or lshader.endswith('_hair'):
@@ -701,13 +694,11 @@ def load(operator, context, filepath='', **kwargs):
             bone.matrix = bone.parent.matrix @ mdb_bone['matrix_local']
         else:
             bone.matrix = bone_up_Y @ mdb_bone['matrix_local']
-        # Until we know what these do, we just preserve them
-        bone['group'] = mdb_bone['group']
-        bone['unknown_ints'] = [int(mdb_bone['unk1']), int(mdb_bone['unk2'])]
-        bone['unknown_floats'] = [float(mdb_bone['unk3']), float(mdb_bone['unk4']),
-                                  float(mdb_bone['unk5']), float(mdb_bone['unk6']),
-                                  float(mdb_bone['unk7']), float(mdb_bone['unk8']),
-                                  float(mdb_bone['unk9']), float(mdb_bone['unk10'])]
+        bone['participation_metadata'] = mdb_bone['participation_metadata']
+        bone['semantic_role'] = mdb_bone['semantic_role']
+        bone['normalized_bone_flag'] = mdb_bone['normalized_bone_flag']
+        bone['bounds_half_size'] = mdb_bone['bounds_half_size']
+        bone['bounds_center'] = mdb_bone['bounds_center']
         # Add bone to bone list
         bones.append(bone)
     bpy.ops.object.mode_set(mode='OBJECT')
@@ -791,8 +782,8 @@ def load(operator, context, filepath='', **kwargs):
             mod.object = armature_obj
 
             # Assign material
-            if mdb_mesh['material'] != -1:
-                mesh.materials.append(materials[mdb_mesh['material']])
+            if mdb_mesh['material_index'] != -1:
+                mesh.materials.append(materials[mdb_mesh['material_index']])
 
             mesh.update()
 

@@ -61,7 +61,7 @@ def get_unique_names():
     # Only model-container empties belong in the MDB name table. Armatures,
     # cameras, lights, and unrelated scene helpers must not leak into it.
     for obj in iter_mdb_containers():
-        name = obj.get('mdb_name', obj.name)
+        name = obj['mdb_name']
         if name not in names_set:
             names_set.add(name)
             names_list.append(name)
@@ -69,7 +69,7 @@ def get_unique_names():
     # Only materials that will actually be exported belong in the table.
     for material in bpy.data.materials:
         if material.use_nodes and find_mdb_shader_node(material) is not None:
-            name = material.get('mdb_name', material.name)
+            name = material['mdb_name']
             if name not in names_set:
                 names_set.add(name)
                 names_list.append(name)
@@ -87,6 +87,16 @@ def iter_exported_mesh_objects():
         for child in container.children:
             if child.type == 'MESH':
                 yield child
+
+
+def iter_assigned_materials():
+    seen = set()
+    for mesh_object in iter_exported_mesh_objects():
+        for material in mesh_object.data.materials:
+            if material is None or material in seen:
+                continue
+            seen.add(material)
+            yield material
 
 
 def find_non_triangulated_meshes():
@@ -148,11 +158,11 @@ def get_bone_data(names):
         bone_data['world_bind_translation'] = (
             bone_up_Y.inverted() @ bone.matrix_local
         ).translation.copy()
-        # Get unknown values
-        bone_data['group'] = bone['group']
-        bone_data['unk1'] = bone['unknown_ints'][0]
-        bone_data['unk2'] = bone['unknown_ints'][1]
-        bone_data['unknown_floats'] = bone['unknown_floats']
+        bone_data['participation_metadata'] = bone['participation_metadata']
+        bone_data['semantic_role'] = bone['semantic_role']
+        bone_data['normalized_bone_flag'] = bool(bone['normalized_bone_flag'])
+        bone_data['bounds_half_size'] = list(bone['bounds_half_size'])
+        bone_data['bounds_center'] = list(bone['bounds_center'])
         # Append the bone data to the list
         bones.append(bone_data)
     return bones
@@ -167,17 +177,15 @@ def write_bone_data(f, bones):
         f.write(struct.pack('i', bone['first_child']))
         f.write(struct.pack('I', bone['name_index']))
         f.write(struct.pack('I', bone['child_count']))
-        f.write(struct.pack('B', bone['group']))
-        # Unknown bytes
-        f.write(struct.pack('B', bone['unk1']))
-        f.write(struct.pack('B', bone['unk2']))  # true or the mesh will not visualize. Unknown why.
-        # Padding previous bytes to 8
-        f.write(bytes([0x00, 0x00, 0x00, 0x00, 0x00]))
+        f.write(struct.pack('B', bone['participation_metadata']))
+        f.write(struct.pack('b', bone['semantic_role']))
+        f.write(struct.pack('B', bone['normalized_bone_flag']))
+        f.write(bytes(5))  # Reserved/alignment
         # Matrices
         f.write(struct.pack('16f', *bone['local_matrix']))
         f.write(struct.pack('16f', *bone['inverse_bind_matrix']))
-        # 2 Unknown float4's, last value always 1
-        f.write(struct.pack('8f', *bone['unknown_floats']))
+        f.write(struct.pack('4f', *bone['bounds_half_size']))
+        f.write(struct.pack('4f', *bone['bounds_center']))
 
 
 def get_textures():
@@ -202,23 +210,11 @@ def get_textures():
                 index = node['mdb_texture_index']
                 while len(textures) <= index:
                     textures.append({'index': len(textures), 'name': '', 'filename': ''})
-                fallback = node.image.name if node.image else ''
                 textures[index] = {
                     'index': index,
-                    'name': node.get(
-                        'mdb_texture_name',
-                        os.path.splitext(fallback)[0],
-                    ),
-                    'filename': node.get('mdb_texture_filename', fallback),
+                    'name': node['mdb_texture_name'],
+                    'filename': node['mdb_texture_filename'],
                 }
-            elif node.image is not None:
-                filename = node.image.name
-                if not any(texture['filename'] == filename for texture in textures):
-                    textures.append({
-                        'index': len(textures),
-                        'name': os.path.splitext(filename)[0],
-                        'filename': filename,
-                    })
     return textures
 
 
@@ -245,61 +241,43 @@ def write_texture_data(file, textures, utf16_strings):
         file.write(bytes([0x00]) * 4)
 
 
-def get_materials(indexed_strings, textures):
-    # TODO some materials still leak into the export that are not used by the original model
-    # TODO Some models without blendweights still get exported blend data
+def get_materials(indexed_strings):
+    # TODO: Associate imported materials with their source MDB so tagged
+    # materials from another imported model cannot leak into this export.
     materials = []
     valid_materials = []
-    # Explicit MDB tags are authoritative. The lookup check only keeps old .blend
-    # files made by earlier add-on versions exportable.
+    # Only explicitly tagged MDB materials are exportable.
     for material in bpy.data.materials:
-        if material.use_nodes:
-            if find_mdb_shader_node(material) is not None:
-                valid_materials.append(material)
-            else:
-                print(f"Warning: Material {material.name} ignored for not having a shader node.")
+        if material.use_nodes and find_mdb_shader_node(material) is not None:
+            valid_materials.append(material)
 
-    valid_materials.sort(key=lambda material: material.get('mdb_material_index', 0x7fffffff))
+    valid_materials.sort(key=lambda material: material['mdb_material_index'])
 
     # Process the valid materials
-    for index, material in enumerate(valid_materials):
+    for material in valid_materials:
         material_data = {
-            'index': material.get('mdb_material_index', index),
-            'mat_name_index': indexed_strings.index(material.get('mdb_name', material.name)),
+            'index': material['mdb_material_index'],
+            'mat_name_index': indexed_strings.index(material['mdb_name']),
             'blender_material': material,
-            'render_priority': material['render_priority'],
-            'render_layer': material['render_layer'],
-            'render_type': material['render_type'],
+            'draw_priority': material['draw_priority'],
+            'render_queue_class': material['render_queue_class'],
+            'render_participation_flags': material['render_participation_flags'],
         }
         parameters = []
         texture_data = []
         node = find_mdb_shader_node(material)
-        material_data['shader_name'] = material.get(
-            'mdb_shader_name',
-            node.get('mdb_shader_name', node.node_tree.name),
-        )
+        material_data['shader_name'] = material['mdb_shader_name']
 
-        if 'mdb_parameters' in node:
-            parameters = [
-                get_preserved_parameter(node.inputs, parameter)
-                for parameter in json.loads(node['mdb_parameters'])
-            ]
-            texture_nodes = [
-                texture_node for texture_node in material.node_tree.nodes
-                if texture_node.type == 'TEX_IMAGE' and 'mdb_texture_binding' in texture_node
-            ]
-            texture_nodes.sort(key=lambda texture_node: texture_node['mdb_texture_binding'])
-            texture_data = [get_preserved_texture(texture_node) for texture_node in texture_nodes]
-        else:
-            for input in node.inputs:
-                if input.name.endswith('_y') or input.name.endswith('_alpha'):
-                    continue
-                if find_parent_texture_node(input) is not None:
-                    texture = get_texture(input, textures)
-                    if texture is not None:
-                        texture_data.append(texture)
-                else:
-                    parameters.append(get_parameter(node.inputs, input))
+        parameters = [
+            get_preserved_parameter(node.inputs, parameter)
+            for parameter in json.loads(node['mdb_parameters'])
+        ]
+        texture_nodes = [
+            texture_node for texture_node in material.node_tree.nodes
+            if texture_node.type == 'TEX_IMAGE' and 'mdb_texture_binding' in texture_node
+        ]
+        texture_nodes.sort(key=lambda texture_node: texture_node['mdb_texture_binding'])
+        texture_data = [get_preserved_texture(texture_node) for texture_node in texture_nodes]
         material_data['parameters'] = parameters
         material_data['parameter_count'] = len(parameters)
         material_data['parameter_offset'] = 0
@@ -315,8 +293,6 @@ def find_mdb_shader_node(material):
         if not hasattr(node, 'inputs') or node.type != 'GROUP':
             continue
         if 'mdb_shader_name' in node:
-            return node
-        if node.node_tree is not None and node.node_tree.outputs.get('Surface') is not None:
             return node
     return None
 
@@ -350,97 +326,16 @@ def get_preserved_texture(image_node):
     return {
         'texture_index': image_node['mdb_texture_index'],
         'type': image_node['mdb_texture_slot'],
-        'sampler_flags': image_node.get('mdb_sampler_flags', 0),
-        'filter': image_node.get('mdb_filter', 0),
-        'address_u': image_node.get('mdb_address_u', 0),
-        'address_v': image_node.get('mdb_address_v', 0),
-        'address_w': image_node.get('mdb_address_w', 0),
-        'max_anisotropy': image_node.get('mdb_max_anisotropy', 0),
-        'min_lod': image_node.get('mdb_min_lod', 0.0),
-        'max_lod': image_node.get('mdb_max_lod', 0.0),
-        'lod_bias': image_node.get('mdb_lod_bias', 0.0),
+        'sampler_flags': image_node['mdb_sampler_flags'],
+        'filter': image_node['mdb_filter'],
+        'address_u': image_node['mdb_address_u'],
+        'address_v': image_node['mdb_address_v'],
+        'address_w': image_node['mdb_address_w'],
+        'max_anisotropy': image_node['mdb_max_anisotropy'],
+        'min_lod': image_node['mdb_min_lod'],
+        'max_lod': image_node['mdb_max_lod'],
+        'lod_bias': image_node['mdb_lod_bias'],
     }
-
-
-# Gets the parameters relevant data for this node input
-def get_parameter(all_inputs, input):
-    parameter_data = None
-    if input.name.endswith('_x'):
-        parameter_name = input.name[:-2]
-        y_input = all_inputs[parameter_name + '_y']
-        parameter_data = {
-            'name': parameter_name,
-            'values': [input.default_value, y_input.default_value],
-            'type': 1,  #Vector2 type
-            'size': 2
-        }
-    elif input.type == 'RGBA':
-        type = 2  #RGB type
-        values = [input.default_value[0], input.default_value[1], input.default_value[2]]
-        alpha_input = all_inputs.get(input.name+'_alpha', None)
-        if alpha_input is not None:
-            type = 3  #RGBA type
-            values.append(alpha_input.default_value)
-        parameter_data = {
-            'name': input.name,
-            'values': values,
-            'type': type,
-            'size': len(values),
-        }
-    elif input.type == 'VALUE':
-        parameter_data = {
-            'name': input.name,
-            'values': [input.default_value],
-            'type': 0,  # Float type
-            'size': 1
-        }
-    else:
-        print(f"Unknown parameter type! Not exported! {input.name}, {input.type}")
-    # Pad params to 6 values, this makes writing easier
-    parameter_data['values'] = parameter_data['values'] + [0.0] * (6-len(parameter_data['values']))
-    return parameter_data
-
-
-# Gets the texture relevant data for this node input
-def get_texture(input, textures):
-    image_node = find_parent_texture_node(input)
-    if image_node is None:
-        print(f"Warning: Texture input '{input.name}' has no image node; skipping.")
-        return None
-    filename = image_node.image.name if image_node.image else image_node.get(
-        'mdb_texture_filename',
-    )
-    if not filename:
-        print(f"Warning: Texture input '{input.name}' has no usable filename; skipping.")
-        return None
-    texture_data = {
-        'texture_index': next(
-            index for index, texture in enumerate(textures)
-            if texture['filename'] == filename
-        ),
-        'type': input.name,
-        'sampler_flags': 0,
-        'filter': 0,
-        'address_u': 0,
-        'address_v': 0,
-        'address_w': 0,
-        'max_anisotropy': 0,
-        'min_lod': 0.0,
-        'max_lod': 0.0,
-        'lod_bias': 0.0,
-    }
-    return texture_data
-
-
-# Recursively finds the source node which supplies the texture to this node input
-def find_parent_texture_node(input):
-    for link in input.links:
-        if link.from_node.type == 'TEX_IMAGE':
-            return link.from_node
-        for input in link.from_node.inputs:
-            result = find_parent_texture_node(input)
-            if result:
-                return result
 
 
 # Writes all material data, total size per material 0x20 (32)
@@ -449,11 +344,8 @@ def write_material_data(file, materials, ascii_strings, utf16_strings):
     for material in materials:
         material['base_pos'] = file.tell()
         file.write(struct.pack('H', material['index']))
-        render_priority = material['render_priority']
-        if render_priority > 127:
-            render_priority -= 256  # Compatibility with older unsigned imports.
-        file.write(struct.pack('b', render_priority))
-        file.write(struct.pack('B', material['render_layer']))
+        file.write(struct.pack('b', material['draw_priority']))
+        file.write(struct.pack('B', material['render_queue_class']))
         file.write(struct.pack('I', material['mat_name_index']))
         utf16_strings.append({
             'string': material['shader_name'],
@@ -467,7 +359,8 @@ def write_material_data(file, materials, ascii_strings, utf16_strings):
         material['texture_pos'] = file.tell()
         file.write(struct.pack('i', 0))
         file.write(struct.pack('i', material['texture_count']))
-        file.write(struct.pack('I', material['render_type']))
+        file.write(struct.pack('B', material['render_participation_flags']))
+        file.write(bytes(3))  # Reserved/alignment
 
     # Write the parameter and texture data per material
     for material in materials:
@@ -526,7 +419,7 @@ def get_objects(names, materials):
     objects = []
     obj_index = 0
     for obj in iter_mdb_containers():
-        object_name = obj.get('mdb_name', obj.name)
+        object_name = obj['mdb_name']
         object_data = {
             'index': obj_index,
             'name': object_name,
@@ -593,27 +486,26 @@ def get_mesh_data(index, mesh_object, materials):
     mesh.calc_tangents()
     vertex_loop_pairs, indices = split_vertices(mesh)
     mesh_data = {
-        'skinned_mesh': int(is_skinned),
-        'bones_per_vertex': bone_weights,
-        # TODO who wants to bet there is a 2nd material option at 0x08?
+        'is_skinned': int(is_skinned),
+        'bone_influence_count': bone_weights,
         'material_index': material_index,
-        'vertices_count': len(vertex_loop_pairs),
+        'vertex_count': len(vertex_loop_pairs),
         'mesh_index': index,
-        'vertices_data': get_vertices_data(mesh, is_skinned, vertex_loop_pairs),
-        'indices_count': len(indices),
-        'indice_data': indices,
+        'vertex_layouts': get_vertex_layouts(mesh, is_skinned, vertex_loop_pairs),
+        'index_count': len(indices),
+        'indices': indices,
     }
-    # Total data size per vertex?
+    # Total byte stride of one interleaved vertex record.
     data_size = 0
-    for data in mesh_data['vertices_data']:
+    for data in mesh_data['vertex_layouts']:
         data_size += data['size']
-    mesh_data['vertices_data_size'] = data_size
-    mesh_data['layout_count'] = len(mesh_data['vertices_data'])
+    mesh_data['vertex_stride'] = data_size
+    mesh_data['layout_count'] = len(mesh_data['vertex_layouts'])
     return mesh_data
 
-# Gathers all the data per vertices and returns the object
-def get_vertices_data(mesh, is_skinned, vertex_loop_pairs):
-    vertices_data = []
+# Build the interleaved vertex-layout channels and their values.
+def get_vertex_layouts(mesh, is_skinned, vertex_loop_pairs):
+    vertex_layouts = []
     # Due to the nature of this data, it makes sense to just generate it as i saw in example files
     # We cannot be certain for each of these if they exist or not until proven otherwise in practice
     if is_skinned:
@@ -624,7 +516,7 @@ def get_vertices_data(mesh, is_skinned, vertex_loop_pairs):
             'channel': 0,
             'data': []
         }
-        vertices_data.append(blend_indices_data)
+        vertex_layouts.append(blend_indices_data)
         blend_weight_data = {
             'name': 'BLENDWEIGHT',
             'type': 1,
@@ -632,7 +524,7 @@ def get_vertices_data(mesh, is_skinned, vertex_loop_pairs):
             'channel': 0,
             'data': []
         }
-        vertices_data.append(blend_weight_data)
+        vertex_layouts.append(blend_weight_data)
     binormal_data = {
         'name': 'binormal',
         'type': 7,
@@ -640,7 +532,7 @@ def get_vertices_data(mesh, is_skinned, vertex_loop_pairs):
         'channel': 0,
         'data': []
     }
-    vertices_data.append(binormal_data)
+    vertex_layouts.append(binormal_data)
     normal_data = {
         'name': 'normal',
         'type': 7,
@@ -648,7 +540,7 @@ def get_vertices_data(mesh, is_skinned, vertex_loop_pairs):
         'channel': 0,
         'data': []
     }
-    vertices_data.append(normal_data)
+    vertex_layouts.append(normal_data)
     position_data = {
         'name': 'position',
         'type': 7,
@@ -656,7 +548,7 @@ def get_vertices_data(mesh, is_skinned, vertex_loop_pairs):
         'channel': 0,
         'data': []
     }
-    vertices_data.append(position_data)
+    vertex_layouts.append(position_data)
     tangent_data = {
         'name': 'tangent',
         'type': 7,
@@ -664,7 +556,7 @@ def get_vertices_data(mesh, is_skinned, vertex_loop_pairs):
         'channel': 0,
         'data': []
     }
-    vertices_data.append(tangent_data)
+    vertex_layouts.append(tangent_data)
     # We store a UV array seperately just for easy access when looping over indices.
     uv_data = []
     for channel, uv in enumerate(mesh.uv_layers):
@@ -676,7 +568,7 @@ def get_vertices_data(mesh, is_skinned, vertex_loop_pairs):
             'data': []
         }
         uv_data.append(texcoord_data)
-        vertices_data.append(texcoord_data)
+        vertex_layouts.append(texcoord_data)
 
     # Capitalize all the names in EDF6, as they seem to expect that
     if gameVersion == 6:
@@ -717,10 +609,10 @@ def get_vertices_data(mesh, is_skinned, vertex_loop_pairs):
             blend_indices_data['data'].append([indices[0], indices[1], indices[2], indices[3]])
     # Set offsets in data
     offset = 0
-    for layout in vertices_data:
+    for layout in vertex_layouts:
         layout['offset'] = offset
         offset += layout['size']
-    return vertices_data
+    return vertex_layouts
 
 
 def write_object_data(file, objects, ascii_strings):
@@ -744,29 +636,29 @@ def write_mesh_data(file, object, ascii_strings):
     # Write Mesh info
     for mesh in object['mesh_data']:
         mesh['base_pos'] = file.tell()
-        file.write(bytes([0x00]))  # Unknown bool
-        file.write(struct.pack('B', mesh['skinned_mesh']))
-        file.write(struct.pack('B', mesh['bones_per_vertex']))
+        file.write(bytes([0x00]))  # Triangle-list topology
+        file.write(struct.pack('B', mesh['is_skinned']))
+        file.write(struct.pack('B', mesh['bone_influence_count']))
         file.write(bytes([0x00]))  # Alignment
         file.write(struct.pack('i', mesh['material_index']))
-        file.write(struct.pack('i', 0))  # Unknown value always 0?
+        file.write(struct.pack('I', 0))  # Reserved/ignored by the game loader
         mesh['vertex_layout_pos'] = file.tell()
         file.write(struct.pack('i', 0))
-        file.write(struct.pack('H', mesh['vertices_data_size']))
+        file.write(struct.pack('H', mesh['vertex_stride']))
         file.write(struct.pack('H', mesh['layout_count']))
-        file.write(struct.pack('I', mesh['vertices_count']))
+        file.write(struct.pack('I', mesh['vertex_count']))
         file.write(struct.pack('I', mesh['mesh_index']))
         mesh['vertex_data_pos'] = file.tell()
         file.write(struct.pack('i', 0))
-        file.write(struct.pack('I', mesh['indices_count']))
-        mesh['indice_data_pos'] = file.tell()
+        file.write(struct.pack('I', mesh['index_count']))
+        mesh['index_data_pos'] = file.tell()
         file.write(struct.pack('i', 0))
 
     # Write Vertex Layout info
     for mesh in object['mesh_data']:
         # Replace vertex_layout_pos in mesh data
         rewrite_offset(file, mesh['vertex_layout_pos'], file.tell(), mesh['base_pos'])
-        for layout in mesh['vertices_data']:
+        for layout in mesh['vertex_layouts']:
             base_pos = file.tell()
             file.write(struct.pack('I', layout['type']))
             file.write(struct.pack('I', layout['offset']))
@@ -781,16 +673,16 @@ def write_mesh_data(file, object, ascii_strings):
 def write_vertex_data(file, object):
     # Write all indices
     for mesh in object['mesh_data']:
-        # Replace indice_data_pos in mesh data
-        rewrite_offset(file, mesh['indice_data_pos'], file.tell(), mesh['base_pos'])
-        for indice in mesh['indice_data']:
-            file.write(struct.pack('H', indice))
+        # Replace index_data_pos in mesh data
+        rewrite_offset(file, mesh['index_data_pos'], file.tell(), mesh['base_pos'])
+        for index in mesh['indices']:
+            file.write(struct.pack('H', index))
     # Write all Vertex data
     for mesh in object['mesh_data']:
         # Replace vertex_data_pos in mesh data
         rewrite_offset(file, mesh['vertex_data_pos'], file.tell(), mesh['base_pos'])
-        for i in range(mesh['vertices_count']):
-            for layout in mesh['vertices_data']:
+        for i in range(mesh['vertex_count']):
+            for layout in mesh['vertex_layouts']:
                 type = layout['type']
                 vert_data = layout['data'][i]
                 if type == 1: #float4
@@ -871,7 +763,7 @@ def resolve_bone_name_matches(bones, objects):
         positions = []
         for mesh_data in object_data['mesh_data']:
             position_layout = next(
-                data for data in mesh_data['vertices_data']
+                data for data in mesh_data['vertex_layouts']
                 if data['name'].lower() == 'position'
             )
             positions.extend(
@@ -887,7 +779,7 @@ def resolve_bone_name_matches(bones, objects):
 
     bones_by_name = {}
     for bone in bones:
-        if bone['group'] in (1, 2) and bone['name']:
+        if bone['participation_metadata'] in (1, 2) and bone['name']:
             bones_by_name.setdefault(bone['name'], []).append(bone)
 
     matches = {}
@@ -923,11 +815,11 @@ def recompute_bone_bounding_boxes(bones, objects):
     skinned_vertices = {}
     for object_data in objects:
         for mesh_data in object_data['mesh_data']:
-            if not mesh_data['skinned_mesh']:
+            if not mesh_data['is_skinned']:
                 continue
             layouts = {
                 data['name'].lower(): data
-                for data in mesh_data['vertices_data']
+                for data in mesh_data['vertex_layouts']
             }
             for position, indices, weights in zip(
                 layouts['position']['data'],
@@ -941,18 +833,16 @@ def recompute_bone_bounding_boxes(bones, objects):
 
     rigid_vertices = resolve_bone_name_matches(bones, objects)
     for bone in bones:
-        if bone['group'] == 0:
+        if bone['participation_metadata'] == 0:
             continue
-        if bone['group'] == 3:
+        if bone['participation_metadata'] == 3:
             vertices = skinned_vertices.get(bone['index'])
         else:
             vertices = rigid_vertices.get(bone['index'])
 
         if not vertices:
-            bone['unknown_floats'] = [
-                0.0, 0.0, 0.0, 1.0,
-                0.0, 0.0, 0.0, 1.0,
-            ]
+            bone['bounds_half_size'] = [0.0, 0.0, 0.0, 1.0]
+            bone['bounds_center'] = [0.0, 0.0, 0.0, 1.0]
             continue
 
         local_vertices = [bone['inv_matrix'] @ vertex for vertex in vertices]
@@ -966,16 +856,92 @@ def recompute_bone_bounding_boxes(bones, objects):
         ))
         size = (maximum - minimum) * 0.5
         offset = (maximum + minimum) * 0.5
-        bone['unknown_floats'] = [
-            size.x, size.y, size.z, 1.0,
-            offset.x, offset.y, offset.z, 1.0,
-        ]
+        bone['bounds_half_size'] = [size.x, size.y, size.z, 1.0]
+        bone['bounds_center'] = [offset.x, offset.y, offset.z, 1.0]
 
 
 def report_export(operator, level, message):
     if hasattr(operator, 'report'):
         operator.report({level}, message)
     print(f'{level}: {message}')
+
+
+def find_incomplete_mdb_metadata():
+    missing = []
+    if len(bpy.data.armatures) == 0:
+        return ['armature: missing']
+    required_bone_properties = (
+        'participation_metadata',
+        'semantic_role',
+        'normalized_bone_flag',
+        'bounds_half_size',
+        'bounds_center',
+    )
+    for bone in bpy.data.armatures[0].bones:
+        absent = [name for name in required_bone_properties if name not in bone]
+        if absent:
+            missing.append(f"bone '{bone.name}': {', '.join(absent)}")
+
+    required_material_properties = (
+        'mdb_material_index',
+        'mdb_name',
+        'mdb_shader_name',
+        'mdb_texture_table',
+        'draw_priority',
+        'render_queue_class',
+        'render_participation_flags',
+    )
+    assigned_materials = set(iter_assigned_materials())
+    for material in assigned_materials:
+        if not material.use_nodes:
+            missing.append(f"material '{material.name}': nodes disabled")
+            continue
+        if find_mdb_shader_node(material) is None:
+            missing.append(
+                f"material '{material.name}': current MDB shader metadata",
+            )
+
+    for material in bpy.data.materials:
+        shader_node = (
+            find_mdb_shader_node(material)
+            if material.use_nodes
+            else None
+        )
+        if shader_node is None:
+            continue
+        absent = [name for name in required_material_properties if name not in material]
+        if 'mdb_parameters' not in shader_node:
+            absent.append('shader node mdb_parameters')
+        required_texture_properties = (
+            'mdb_texture_index',
+            'mdb_texture_name',
+            'mdb_texture_filename',
+            'mdb_texture_slot',
+            'mdb_sampler_flags',
+            'mdb_filter',
+            'mdb_address_u',
+            'mdb_address_v',
+            'mdb_address_w',
+            'mdb_max_anisotropy',
+            'mdb_min_lod',
+            'mdb_max_lod',
+            'mdb_lod_bias',
+        )
+        for texture_node in material.node_tree.nodes:
+            if texture_node.type != 'TEX_IMAGE' or 'mdb_texture_binding' not in texture_node:
+                continue
+            absent.extend(
+                f"texture node {name}"
+                for name in required_texture_properties
+                if name not in texture_node
+            )
+        if absent:
+            missing.append(f"material '{material.name}': {', '.join(absent)}")
+
+    for container in iter_mdb_containers():
+        if 'mdb_name' not in container:
+            missing.append(f"object '{container.name}': mdb_name")
+    return missing
 
 
 def save(operator, context, filepath="", version=0, **kwargs):
@@ -989,6 +955,16 @@ def save(operator, context, filepath="", version=0, **kwargs):
             + ', '.join(non_triangular)
         )
         report_export(operator, 'ERROR', message)
+        return {'CANCELLED'}
+    incomplete_metadata = find_incomplete_mdb_metadata()
+    if incomplete_metadata:
+        report_export(
+            operator,
+            'ERROR',
+            'This scene lacks current lossless MDB metadata. Re-import the '
+            'source MDB with this add-on version. Missing: '
+            + '; '.join(incomplete_metadata[:8]),
+        )
         return {'CANCELLED'}
     if find_overweight_vertices():
         report_export(
@@ -1004,7 +980,7 @@ def save(operator, context, filepath="", version=0, **kwargs):
     # Gather all the different parts we need
     bones = get_bone_data(indexed_strings)
     texture_names = get_textures()
-    materials = get_materials(indexed_strings, texture_names)
+    materials = get_materials(indexed_strings)
     objects = get_objects(indexed_strings, materials)
     recompute_bone_bounding_boxes(bones, objects)
 

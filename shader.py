@@ -97,13 +97,13 @@ def material_signature(material):
         for parameter in material['params']
     )
     textures = tuple(texture['map'] for texture in material['textures'])
-    return parameters, textures, material.get('render_layer', 0)
+    return parameters, textures, material.get('render_queue_class', 0)
 
 
 class Shader:
     def __init__(self, shader_name, material):
         self.name = shader_name
-        self.material = material or {'params': [], 'textures': [], 'render_layer': 0}
+        self.material = material or {'params': [], 'textures': [], 'render_queue_class': 0}
         self.parameters = {
             parameter['name']: parameter
             for parameter in self.material['params']
@@ -233,7 +233,7 @@ class Shader:
             alpha = self.multiply_value(alpha, self.input('diffuse_alpha'))
 
         uses_transparency = (
-            self.material.get('render_layer') == 2
+            self.material.get('render_queue_class') == 2
             or self.name.lower().endswith(('_alpha', '_hair', '_clip'))
             or alpha is not None
         )

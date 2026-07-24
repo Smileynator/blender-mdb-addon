@@ -42,6 +42,11 @@ Shader details might be incomplete, but most of the visual aspects should be the
 
 Models make use of some extra data we either cannot support in Blender or do not know what they exactly do. For the time being those are stored as Custom Properties on the Bones and Materials.
 
+Scenes imported with add-on versions before the MDB metadata cleanup must be
+re-imported from their source MDB before export. Older imports did not preserve
+enough information for a reliable round trip, so the exporter deliberately
+cancels instead of guessing missing values.
+
 ## Editing MDB materials
 
 The shader group in Blender has two related but distinct jobs:
@@ -74,11 +79,18 @@ The game internally heavily relies on specific naming structures we have not def
 Try keeping editing of the materials to a minimal, mostly they are for setting up textures as well as default variables the game uses, the rest is purely there to ensure blender renders it somewhat properly as a preview.
 
 Custom Properties you should know about:
-- Bones have 'unknown_ints[0]' that might be related to groupings. the value 3 seems to be assigned to all bones that actually need to hold meshes that have weight painting.
+- Bones preserve `participation_metadata`, signed `semantic_role`, and
+  `normalized_bone_flag` custom properties. The exact authoring meaning of the
+  first and runtime consumer of the last remain unconfirmed.
+- Bone `bounds_half_size` and `bounds_center` custom properties contain the two
+  bounding float4s. Export recomputes them from the edited geometry.
 - Materials retain MDB identity and material-table metadata in addition to the following render properties.
-  - Render Priority is literal ordering. If 2 transparent objects exist, and one has higher render priority, it will show up in the front.
-  - Render Layer is normally 0 for opaque objects, and 2 on transparent and UI elements.
-  - Render Type is almost always 3, but seems to be set to 2 for objects which "update" their texture, like fill bars, or the shield bearer's shield.
+  - `draw_priority` is literal ordering within render-queue class 2. A higher
+    value is submitted later.
+  - `render_queue_class` is normally 0, while class 2 is used by transparent
+    and UI elements.
+  - `render_participation_flags` is normally 3. Bit 0 enables shadow casting;
+    value 2 is observed on transparent UI and barrier materials.
  
 # CANM Notes
 CANM import detects EDF5 (`512`) and EDF6 (`768`) automatically. Export provides separate EDF5 and EDF6 entries. EDF6 rotation channels use absolute quaternions and their keyframe block is written with 16-byte alignment.

@@ -68,6 +68,27 @@ def main():
     bpy.data.objects.remove(quad, do_unlink=True)
     bpy.data.objects.remove(container, do_unlink=True)
 
+    legacy_container = bpy.data.objects.new("LegacyContainer", None)
+    bpy.context.scene.collection.objects.link(legacy_container)
+    legacy_triangle = create_mesh(
+        "LegacyTriangle",
+        ((0, 0, 0), (1, 0, 0), (0, 1, 0)),
+        ((0, 1, 2),),
+    )
+    legacy_triangle.parent = legacy_container
+    operator = Operator()
+    result = export_mdb.save(
+        operator,
+        bpy.context,
+        filepath=str(output_path),
+        version=5,
+    )
+    assert result == {"CANCELLED"}
+    assert not output_path.exists()
+    assert any("Re-import" in message for _, message in operator.messages)
+    bpy.data.objects.remove(legacy_triangle, do_unlink=True)
+    bpy.data.objects.remove(legacy_container, do_unlink=True)
+
     seam_mesh = create_mesh(
         "UVSeam",
         ((0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)),
@@ -91,7 +112,7 @@ def main():
         group.add((0,), weight, "REPLACE")
     layouts = {
         layout["name"]: layout
-        for layout in export_mdb.get_vertices_data(
+        for layout in export_mdb.get_vertex_layouts(
             seam_mesh.data,
             True,
             vertex_loop_pairs,
@@ -105,16 +126,17 @@ def main():
     bones = [{
         "index": 0,
         "name": "Bone",
-        "group": 3,
+        "participation_metadata": 3,
         "inv_matrix": mathutils.Matrix.Identity(4),
-        "unknown_floats": [0.0] * 8,
+        "bounds_half_size": [0.0] * 4,
+        "bounds_center": [0.0] * 4,
     }]
     objects = [{
         "index": 0,
         "name": "Object",
         "mesh_data": [{
-            "skinned_mesh": 1,
-            "vertices_data": [
+            "is_skinned": 1,
+            "vertex_layouts": [
                 {
                     "name": "position",
                     "data": ((0, 0, 0, 1), (2, 4, 6, 1)),
@@ -131,14 +153,12 @@ def main():
         }],
     }]
     export_mdb.recompute_bone_bounding_boxes(bones, objects)
-    assert bones[0]["unknown_floats"] == [
-        1.0, 2.0, 3.0, 1.0,
-        1.0, 2.0, 3.0, 1.0,
-    ]
+    assert bones[0]["bounds_half_size"] == [1.0, 2.0, 3.0, 1.0]
+    assert bones[0]["bounds_center"] == [1.0, 2.0, 3.0, 1.0]
 
     print(
-        "Mandatory triangulation, UV seams, normalized influence limits, "
-        "and bone bounds passed."
+        "Mandatory triangulation and metadata checks, UV seams, normalized "
+        "influence limits, and bone bounds passed."
     )
 
 
