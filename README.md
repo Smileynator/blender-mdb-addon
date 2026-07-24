@@ -32,14 +32,25 @@ Very little error catching has been implemented, so expect some problems.
 # MDB Notes
 MDB export requires every face to be triangulated. Export is cancelled before writing if any quad or n-gon remains.
 
+Each exported mesh must have exactly one non-empty material slot. MDB mesh
+records reference one material, so meshes with no material or multiple Blender
+material slots are rejected instead of guessed.
+
 Legacy triangle-strip topology is recognized but not yet verified against a
 real MDB sample. The importer cancels before creating scene data when it finds
 a strip mesh, rather than interpreting its indices as an incorrect triangle
 list. Please include the source MDB when reporting this error.
 
 The exporter enforces the game's four-influence vertex limit. When a vertex has more than four positive bone weights, the four strongest are retained and normalized. Meshes with an Armature modifier but no actual positive weights are exported without unnecessary blend-index and blend-weight channels.
+Weighted vertex groups are matched to MDB bones by name rather than Blender
+group order. Export is cancelled when a positively weighted group has no
+matching bone. The bone table can contain more than 256 entries, but the
+format's 8-bit blend indices can only weight vertices to bones at indices
+0-255; export is cancelled if a mesh weights a later bone.
 
 Blender stores UVs and split normals per face corner while MDB stores them per vertex. Export therefore splits vertices where UVs, normals, or tangent-space data differ so seams remain intact.
+The resulting exported vertex indices are 16-bit. A mesh that exceeds 65,536
+vertices after seam splitting is rejected with an error.
 
 Bone bounding boxes are always recomputed from the geometry being exported. Weighted vertices supply deform-bone bounds; matching same-named objects supply bounds for the unskinned bone groups observed to use rigid geometry. This is mandatory because preserved import-time bounds become invalid after geometry or rig edits.
 

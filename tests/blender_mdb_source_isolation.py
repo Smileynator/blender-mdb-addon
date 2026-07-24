@@ -82,6 +82,17 @@ def main():
         index=len(first_mesh_object.data.materials) - 1,
     )
 
+    unmatched_group = first_mesh_object.vertex_groups.new(
+        name="NotAnMdbBone",
+    )
+    unmatched_group.add((0,), 100.0, "REPLACE")
+    weight_issues = export_mdb.find_bone_weight_issues(
+        first_source,
+        first_armature.data,
+    )
+    assert any("NotAnMdbBone" in issue for issue in weight_issues)
+    first_mesh_object.vertex_groups.remove(unmatched_group)
+
     first_container = next(export_mdb.iter_mdb_containers(first_source))
     replacement_mesh = bpy.data.meshes.new("ReplacementMeshData")
     replacement_object = bpy.data.objects.new("ReplacementMesh", replacement_mesh)

@@ -90,6 +90,28 @@ def main():
     bpy.data.objects.remove(legacy_triangle, do_unlink=True)
     bpy.data.objects.remove(legacy_container, do_unlink=True)
 
+    material_container = bpy.data.objects.new("MaterialContainer", None)
+    material_container["mdb_source_id"] = "material-validation"
+    bpy.context.scene.collection.objects.link(material_container)
+    material_triangle = create_mesh(
+        "MaterialTriangle",
+        ((0, 0, 0), (1, 0, 0), (0, 1, 0)),
+        ((0, 1, 2),),
+    )
+    material_triangle.parent = material_container
+    issues = export_mdb.find_material_slot_issues("material-validation")
+    assert any("no material assigned" in issue for issue in issues)
+    material_triangle.data.materials.append(
+        bpy.data.materials.new("MaterialOne"),
+    )
+    material_triangle.data.materials.append(
+        bpy.data.materials.new("MaterialTwo"),
+    )
+    issues = export_mdb.find_material_slot_issues("material-validation")
+    assert any("2 material slots" in issue for issue in issues)
+    bpy.data.objects.remove(material_triangle, do_unlink=True)
+    bpy.data.objects.remove(material_container, do_unlink=True)
+
     seam_mesh = create_mesh(
         "UVSeam",
         ((0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)),
@@ -114,16 +136,32 @@ def main():
     layouts = {
         layout["name"]: layout
         for layout in export_mdb.get_vertex_layouts(
-            seam_mesh.data,
+            seam_mesh,
             True,
             vertex_loop_pairs,
             5,
+            {
+                f"Bone{index}": 100 + index
+                for index in range(5)
+            },
         )
     }
     strongest_weights = layouts["BLENDWEIGHT"]["data"][0]
     strongest_indices = layouts["BLENDINDICES"]["data"][0]
     assert abs(sum(strongest_weights) - 1.0) < 1e-6
-    assert strongest_indices == [4, 3, 2, 1]
+    assert strongest_indices == [104, 103, 102, 101]
+
+    index_issues = export_mdb.find_index_limit_issues([{
+        "name": "LargeObject",
+        "mesh_data": [{
+            "mesh_index": 0,
+            "vertex_count": 65_537,
+            "indices": [0, 1, 65_536],
+        }],
+    }])
+    assert len(index_issues) == 1
+    assert "65,536" in index_issues[0]
+    assert "Split the geometry" in index_issues[0]
 
     bones = [{
         "index": 0,

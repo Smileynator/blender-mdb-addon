@@ -152,12 +152,85 @@ def find_non_triangulated_meshes(source_id):
     ]
 
 
+def find_material_slot_issues(source_id):
+    issues = []
+    for mesh_object in iter_exported_mesh_objects(source_id):
+        materials = mesh_object.data.materials
+        if len(materials) == 0:
+            issues.append(f"mesh '{mesh_object.name}': no material assigned")
+        elif len(materials) > 1:
+            issues.append(
+                f"mesh '{mesh_object.name}': {len(materials)} material slots "
+                '(MDB supports exactly one)',
+            )
+        elif materials[0] is None:
+            issues.append(f"mesh '{mesh_object.name}': empty material slot")
+    return issues
+
+
 def find_overweight_vertices(source_id):
     for mesh_object in iter_exported_mesh_objects(source_id):
         for vertex in mesh_object.data.vertices:
             if sum(group.weight > 0.0 for group in vertex.groups) > 4:
                 return True
     return False
+
+
+def bone_name_to_index(armature):
+    return {
+        bone.name: index
+        for index, bone in enumerate(armature.bones)
+    }
+
+
+def strongest_vertex_influences(vertex):
+    return sorted(
+        (
+            (assignment.weight, assignment.group)
+            for assignment in vertex.groups
+            if assignment.weight > 0.0
+        ),
+        reverse=True,
+    )[:4]
+
+
+def find_bone_weight_issues(source_id, armature):
+    if armature is None:
+        return []
+    issues = []
+    bone_indices = bone_name_to_index(armature)
+    for mesh_object in iter_exported_mesh_objects(source_id):
+        unknown_groups = set()
+        unaddressable_bones = set()
+        for vertex in mesh_object.data.vertices:
+            for _, group_index in strongest_vertex_influences(vertex):
+                group_name = mesh_object.vertex_groups[group_index].name
+                if group_name not in bone_indices:
+                    unknown_groups.add(group_name)
+                elif bone_indices[group_name] > 0xFF:
+                    unaddressable_bones.add(
+                        (group_name, bone_indices[group_name]),
+                    )
+        if unknown_groups:
+            issues.append(
+                f"mesh '{mesh_object.name}': weighted groups do not match MDB "
+                'bones: ' + ', '.join(sorted(unknown_groups)),
+            )
+        if unaddressable_bones:
+            formatted_bones = ', '.join(
+                f'{name} (index {index})'
+                for name, index in sorted(
+                    unaddressable_bones,
+                    key=lambda item: item[1],
+                )
+            )
+            issues.append(
+                f"mesh '{mesh_object.name}': weighted bones exceed the 8-bit "
+                f'blend-index limit: {formatted_bones}. Reduce or carefully '
+                'reorder the armature so every deforming bone is within MDB '
+                'indices 0-255',
+            )
+    return issues
 
 
 def get_bone_data(names, armature):
@@ -344,7 +417,13 @@ def get_preserved_texture(image_node):
 
 
 # Gathers all objects and their underlying data
-def get_objects(names, materials, game_version, source_id):
+def get_objects(
+    names,
+    materials,
+    game_version,
+    source_id,
+    bone_indices,
+):
     objects = []
     obj_index = 0
     for obj in iter_mdb_containers(source_id):
@@ -360,7 +439,13 @@ def get_objects(names, materials, game_version, source_id):
         object_data['mesh_data'] = []
         for index, mesh_object in enumerate(mesh_objects):
             object_data['mesh_data'].append(
-                get_mesh_data(index, mesh_object, materials, game_version)
+                get_mesh_data(
+                    index,
+                    mesh_object,
+                    materials,
+                    game_version,
+                    bone_indices,
+                )
             )
 
         obj_index += 1
@@ -395,7 +480,13 @@ def split_vertices(mesh):
 
 
 # Gathers mesh info data
-def get_mesh_data(index, mesh_object, materials, game_version):
+def get_mesh_data(
+    index,
+    mesh_object,
+    materials,
+    game_version,
+    bone_indices,
+):
     mesh = mesh_object.data
     material_index = -1
     # Get the material used for this mesh
@@ -423,7 +514,11 @@ def get_mesh_data(index, mesh_object, materials, game_version):
         'vertex_count': len(vertex_loop_pairs),
         'mesh_index': index,
         'vertex_layouts': get_vertex_layouts(
-            mesh, is_skinned, vertex_loop_pairs, game_version,
+            mesh_object,
+            is_skinned,
+            vertex_loop_pairs,
+            game_version,
+            bone_indices,
         ),
         'index_count': len(indices),
         'indices': indices,
@@ -437,7 +532,14 @@ def get_mesh_data(index, mesh_object, materials, game_version):
     return mesh_data
 
 # Build the interleaved vertex-layout channels and their values.
-def get_vertex_layouts(mesh, is_skinned, vertex_loop_pairs, game_version):
+def get_vertex_layouts(
+    mesh_object,
+    is_skinned,
+    vertex_loop_pairs,
+    game_version,
+    bone_indices,
+):
+    mesh = mesh_object.data
     vertex_layouts = []
     # Due to the nature of this data, it makes sense to just generate it as i saw in example files
     # We cannot be certain for each of these if they exist or not until proven otherwise in practice
@@ -521,14 +623,13 @@ def get_vertex_layouts(mesh, is_skinned, vertex_loop_pairs, game_version):
             uv_data[i]['data'].append([uv_vector[0], 1.0 - uv_vector[1]])  # UV map flip Y value
         # Skinned mesh
         if is_skinned:
-            influences = sorted(
+            influences = [
                 (
-                    (group.weight, group.group)
-                    for group in vert.groups
-                    if group.weight > 0.0
-                ),
-                reverse=True,
-            )[:4]
+                    weight,
+                    bone_indices[mesh_object.vertex_groups[group_index].name],
+                )
+                for weight, group_index in strongest_vertex_influences(vert)
+            ]
             weight_total = sum(weight for weight, _ in influences)
             weights = [
                 weight / weight_total
@@ -737,12 +838,39 @@ class ExportData:
     utf16_strings: list = field(default_factory=list)
 
 
+def find_index_limit_issues(objects):
+    issues = []
+    for object_data in objects:
+        for mesh in object_data['mesh_data']:
+            if mesh['vertex_count'] > 0x10000:
+                issues.append(
+                    f"object '{object_data['name']}' mesh "
+                    f"{mesh['mesh_index']}: {mesh['vertex_count']} exported "
+                    'vertices exceed the 65,536 addressable by 16-bit indices. '
+                    'Split the geometry into multiple child meshes, or reduce '
+                    'geometry and UV/normal seams',
+                )
+            elif any(index > 0xFFFF for index in mesh['indices']):
+                issues.append(
+                    f"object '{object_data['name']}' mesh "
+                    f"{mesh['mesh_index']}: index exceeds the 16-bit limit. "
+                    'Split the geometry into multiple child meshes',
+                )
+    return issues
+
+
 def build_export_data(game_version, source_id, armature):
     names = get_unique_names(source_id, armature)
     bones = get_bone_data(names, armature)
     textures = get_textures(source_id)
     materials = get_materials(names, source_id)
-    objects = get_objects(names, materials, game_version, source_id)
+    objects = get_objects(
+        names,
+        materials,
+        game_version,
+        source_id,
+        bone_name_to_index(armature),
+    )
     recompute_bone_bounding_boxes(bones, objects)
     objects = sort_objects_by_name_order(objects, bones)
     file_version = EDF5_VERSION if game_version == 5 else EDF6_VERSION
@@ -775,6 +903,15 @@ def save(operator, context, filepath="", version=0, **kwargs):
         )
         report_export(operator, 'ERROR', message)
         return {'CANCELLED'}
+    material_issues = find_material_slot_issues(source_id)
+    if material_issues:
+        report_export(
+            operator,
+            'ERROR',
+            'Each MDB mesh requires exactly one material. Export cancelled: '
+            + '; '.join(material_issues[:8]),
+        )
+        return {'CANCELLED'}
     incomplete_metadata = find_incomplete_mdb_metadata(source_id, armature)
     if incomplete_metadata:
         report_export(
@@ -785,6 +922,15 @@ def save(operator, context, filepath="", version=0, **kwargs):
             + '; '.join(incomplete_metadata[:8]),
         )
         return {'CANCELLED'}
+    bone_weight_issues = find_bone_weight_issues(source_id, armature)
+    if bone_weight_issues:
+        report_export(
+            operator,
+            'ERROR',
+            'MDB skinning metadata is invalid. Export cancelled: '
+            + '; '.join(bone_weight_issues[:8]),
+        )
+        return {'CANCELLED'}
     if find_overweight_vertices(source_id):
         report_export(
             operator,
@@ -793,6 +939,15 @@ def save(operator, context, filepath="", version=0, **kwargs):
             'strongest influences, normalized to a total weight of 1.',
         )
     data = build_export_data(version, source_id, armature)
+    index_limit_issues = find_index_limit_issues(data.objects)
+    if index_limit_issues:
+        report_export(
+            operator,
+            'ERROR',
+            'MDB uses 16-bit mesh indices. Export cancelled: '
+            + '; '.join(index_limit_issues[:8]),
+        )
+        return {'CANCELLED'}
 
     with open(filepath, 'wb') as file:
         write_mdb(file, data)
