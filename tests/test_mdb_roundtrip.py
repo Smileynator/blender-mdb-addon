@@ -301,6 +301,35 @@ class MdbRoundTripTests(unittest.TestCase):
 
         self.assertEqual(float_bits(exported["values"][:4]), float_bits([0.1, 0.2, 0.3, 0.4]))
 
+    def test_triangle_lists_are_accepted_by_topology_check(self):
+        mdb = {
+            "objects": [{
+                "name": "Body",
+                "meshes": [{
+                    "mesh_index": 0,
+                    "topology_selector": 0,
+                }],
+            }],
+        }
+
+        self.assertEqual(IMPORT_MDB.find_triangle_strip_meshes(mdb), [])
+
+    def test_triangle_strips_are_identified_before_scene_creation(self):
+        mdb = {
+            "objects": [{
+                "name": "LegacyBody",
+                "meshes": [
+                    {"mesh_index": 2, "topology_selector": 0},
+                    {"mesh_index": 3, "topology_selector": 1},
+                ],
+            }],
+        }
+
+        self.assertEqual(
+            IMPORT_MDB.find_triangle_strip_meshes(mdb),
+            ["object 'LegacyBody' mesh 3"],
+        )
+
     def assert_materials_equal(self, expected_materials, actual_materials):
         self.assertEqual(len(expected_materials), len(actual_materials))
         for expected, actual in zip(expected_materials, actual_materials):

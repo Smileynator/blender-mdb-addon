@@ -32,6 +32,11 @@ Very little error catching has been implemented, so expect some problems.
 # MDB Notes
 MDB export requires every face to be triangulated. Export is cancelled before writing if any quad or n-gon remains.
 
+Legacy triangle-strip topology is recognized but not yet verified against a
+real MDB sample. The importer cancels before creating scene data when it finds
+a strip mesh, rather than interpreting its indices as an incorrect triangle
+list. Please include the source MDB when reporting this error.
+
 The exporter enforces the game's four-influence vertex limit. When a vertex has more than four positive bone weights, the four strongest are retained and normalized. Meshes with an Armature modifier but no actual positive weights are exported without unnecessary blend-index and blend-weight channels.
 
 Blender stores UVs and split normals per face corner while MDB stores them per vertex. Export therefore splits vertices where UVs, normals, or tangent-space data differ so seams remain intact.

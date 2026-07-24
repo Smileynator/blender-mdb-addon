@@ -617,6 +617,15 @@ def create_mesh_objects(
             )
 
 
+def find_triangle_strip_meshes(mdb):
+    return [
+        f"object '{mdb_object['name']}' mesh {mesh['mesh_index']}"
+        for mdb_object in mdb['objects']
+        for mesh in mdb_object['meshes']
+        if mesh['topology_selector'] != 0
+    ]
+
+
 # Main function
 def load(operator, context, filepath='', **kwargs):
     del kwargs
@@ -634,6 +643,20 @@ def load(operator, context, filepath='', **kwargs):
         if hasattr(operator, 'report'):
             operator.report({'ERROR'}, str(error))
         print(f'ERROR: {error}')
+        return {'CANCELLED'}
+
+    triangle_strips = find_triangle_strip_meshes(mdb)
+    if triangle_strips:
+        message = (
+            'Triangle-strip MDB meshes are recognized but not currently '
+            'supported. Import was cancelled before creating Blender data to '
+            'avoid producing incorrect geometry. A verified source file is '
+            'needed before enabling strip conversion. Found: '
+            + '; '.join(triangle_strips[:8])
+        )
+        if hasattr(operator, 'report'):
+            operator.report({'ERROR'}, message)
+        print(f'ERROR: {message}')
         return {'CANCELLED'}
 
     if bpy.ops.object.mode_set.poll():
