@@ -2,10 +2,18 @@
 # Author: Smileynator
 
 import bpy
+import hashlib
+import itertools
 import math
 import mathutils
 
-from struct import pack
+from struct import pack, unpack
+
+
+# Approximate sharing is permitted only when every decoded sample remains
+# within these role-specific bounds of the stored representative.
+VECTOR_MERGE_TOLERANCE = 2e-5
+ROTATION_MERGE_TOLERANCE_RADIANS = math.radians(0.005)
 
 
 def get_bone_names(missing_bones):
@@ -224,44 +232,250 @@ def convert_to_ushort(array, min, diff):
     return [int(((val - min) * 0xFFFF)/diff) for val in array]
 
 
-def check_duplicate_channel(channels, channel):
-    channel_type = channel.get('type')
-    if channel_type in (2, 3):
-        for index, existing in enumerate(channels):
-            if existing.get('type') != channel_type:
-                continue
-            if channel_type == 2:
-                if all(
-                    channel[name] == existing[name]
-                    for name in ('base_x', 'base_y', 'base_z', 'base_w')
+def as_float32(value):
+    return unpack('<f', pack('<f', value))[0]
+
+
+def channel_serialized_signature(channel, version):
+    data = bytearray()
+    if version == 5:
+        data.extend(pack(
+            '<hH6f',
+            int(channel['has_frames']),
+            channel['keyframes'],
+            channel['base_x'],
+            channel['base_y'],
+            channel['base_z'],
+            channel['speed_x'],
+            channel['speed_y'],
+            channel['speed_z'],
+        ))
+        if channel['has_frames']:
+            for values in zip(
+                channel['offsets_x'],
+                channel['offsets_y'],
+                channel['offsets_z'],
+            ):
+                data.extend(pack('<3H', *values))
+    else:
+        data.extend(pack(
+            '<8fii',
+            channel['base_x'],
+            channel['base_y'],
+            channel['base_z'],
+            channel['base_w'],
+            channel['speed_x'],
+            channel['speed_y'],
+            channel['speed_z'],
+            channel['speed_w'],
+            channel['type'],
+            channel['keyframes'],
+        ))
+        if channel['type'] == 1 and channel['keyframes'] > 1:
+            for values in zip(
+                channel['offsets_x'],
+                channel['offsets_y'],
+                channel['offsets_z'],
+            ):
+                data.extend(pack('<3H', *values))
+        elif channel['type'] == 3 and channel['keyframes'] > 1:
+            for quaternion in channel['frames']:
+                data.extend(pack('<4f', *quaternion))
+    return hashlib.sha256(data).digest()
+
+
+def vector_channel_samples(channel):
+    base = tuple(
+        as_float32(channel[f'base_{axis}'])
+        for axis in 'xyz'
+    )
+    if not channel['has_frames']:
+        return (base,)
+    speed = tuple(
+        as_float32(channel[f'speed_{axis}'])
+        for axis in 'xyz'
+    )
+    return tuple(
+        tuple(
+            base[axis] + offsets[axis] * speed[axis]
+            for axis in range(3)
+        )
+        for offsets in zip(
+            channel['offsets_x'],
+            channel['offsets_y'],
+            channel['offsets_z'],
+        )
+    )
+
+
+def canonical_quaternion(quaternion):
+    quaternion = quaternion.normalized()
+    values = tuple(quaternion)
+    if (
+        values[0] < 0.0
+        or (
+            values[0] == 0.0
+            and next(
+                (value for value in values[1:] if value != 0.0),
+                0.0,
+            ) < 0.0
+        )
+    ):
+        quaternion = -quaternion
+    return quaternion
+
+
+def quaternion_angular_difference(first, second):
+    first_values = tuple(float(value) for value in first)
+    second_values = tuple(float(value) for value in second)
+    dot = sum(
+        first_value * second_value
+        for first_value, second_value in zip(first_values, second_values)
+    )
+    length_product = math.sqrt(
+        sum(value * value for value in first_values)
+        * sum(value * value for value in second_values)
+    )
+    cosine = min(1.0, abs(dot) / length_product)
+    return 2.0 * math.acos(cosine)
+
+
+def rotation_channel_samples(channel, version):
+    if version == 5:
+        return tuple(
+            canonical_quaternion(
+                mathutils.Euler(values, 'XYZ').to_quaternion()
+            )
+            for values in vector_channel_samples(channel)
+        )
+    if channel['type'] == 2:
+        values = (
+            as_float32(channel['base_w']),
+            as_float32(channel['base_x']),
+            as_float32(channel['base_y']),
+            as_float32(channel['base_z']),
+        )
+        return (canonical_quaternion(mathutils.Quaternion(values)),)
+    return tuple(
+        canonical_quaternion(mathutils.Quaternion((
+            as_float32(values[3]),
+            as_float32(values[0]),
+            as_float32(values[1]),
+            as_float32(values[2]),
+        )))
+        for values in channel['frames']
+    )
+
+
+class ChannelDeduplicator:
+    def __init__(self, version):
+        self.version = version
+        self.channels = []
+        self.exact_indices = {}
+        self.approximate_indices = {}
+        self.registered_roles = set()
+
+    def samples(self, channel, role):
+        cache = channel.setdefault('_dedup_samples', {})
+        if role not in cache:
+            if role == 'rotation':
+                cache[role] = rotation_channel_samples(channel, self.version)
+            else:
+                cache[role] = vector_channel_samples(channel)
+        return cache[role]
+
+    def bucket_parts(self, channel, role):
+        samples = self.samples(channel, role)
+        if role == 'rotation':
+            first = tuple(samples[0])
+            last = tuple(samples[-1])
+            anchors = (first[0], first[1], last[2])
+            width = ROTATION_MERGE_TOLERANCE_RADIANS
+        else:
+            first = samples[0]
+            last = samples[-1]
+            anchors = (first[0], first[1], last[2])
+            width = VECTOR_MERGE_TOLERANCE
+        prefix = (
+            role,
+            channel.get('type'),
+            channel['has_frames'],
+            channel['keyframes'],
+        )
+        cells = tuple(math.floor(value / width) for value in anchors)
+        return prefix, cells
+
+    def register_role(self, index, role):
+        if role is None or (index, role) in self.registered_roles:
+            return
+        prefix, cells = self.bucket_parts(self.channels[index], role)
+        self.approximate_indices.setdefault(
+            prefix + cells,
+            [],
+        ).append(index)
+        self.registered_roles.add((index, role))
+
+    def nearby_indices(self, channel, role):
+        prefix, cells = self.bucket_parts(channel, role)
+        seen = set()
+        for offsets in itertools.product((-1, 0, 1), repeat=len(cells)):
+            key = prefix + tuple(
+                cell + offset
+                for cell, offset in zip(cells, offsets)
+            )
+            for index in self.approximate_indices.get(key, ()):
+                if index not in seen:
+                    seen.add(index)
+                    yield index
+
+    def channels_are_close(self, existing, channel, role):
+        existing_samples = self.samples(existing, role)
+        channel_samples = self.samples(channel, role)
+        if len(existing_samples) != len(channel_samples):
+            return False
+        if role != 'rotation':
+            return all(
+                abs(existing_value - channel_value)
+                <= VECTOR_MERGE_TOLERANCE
+                for existing_sample, channel_sample in zip(
+                    existing_samples,
+                    channel_samples,
+                )
+                for existing_value, channel_value in zip(
+                    existing_sample,
+                    channel_sample,
+                )
+            )
+        for existing_sample, channel_sample in zip(
+            existing_samples,
+            channel_samples,
+        ):
+            if quaternion_angular_difference(
+                existing_sample,
+                channel_sample,
+            ) > ROTATION_MERGE_TOLERANCE_RADIANS:
+                return False
+        return True
+
+    def add(self, channel, role=None, allow_approximate=True):
+        signature = channel_serialized_signature(channel, self.version)
+        exact_index = self.exact_indices.get(signature)
+        if exact_index is not None:
+            self.register_role(exact_index, role)
+            return exact_index
+        if role is not None and allow_approximate:
+            for index in self.nearby_indices(channel, role):
+                if self.channels_are_close(
+                    self.channels[index],
+                    channel,
+                    role,
                 ):
                     return index
-            elif channel['frames'] == existing['frames']:
-                return index
-        return -1
-    if channel['has_frames'] == False:
-        for i in range(len(channels)):
-            if channels[i].get('type') != channel_type:
-                continue
-            if channel['base_x'] == channels[i]['base_x'] and \
-                channel['base_y'] == channels[i]['base_y'] and \
-                channel['base_z'] == channels[i]['base_z']:
-                return i
-    else:
-        for i in range(len(channels)):
-            if channels[i].get('type') != channel_type:
-                continue
-            if channel['base_x'] == channels[i]['base_x'] and \
-                channel['base_y'] == channels[i]['base_y'] and \
-                channel['base_z'] == channels[i]['base_z'] and \
-                channel['speed_x'] == channels[i]['speed_x'] and \
-                channel['speed_y'] == channels[i]['speed_y'] and \
-                channel['speed_z'] == channels[i]['speed_z'] and \
-                channel['offsets_x'] == channels[i]['offsets_x'] and \
-                channel['offsets_y'] == channels[i]['offsets_y'] and \
-                channel['offsets_z'] == channels[i]['offsets_z']:
-                return i
-    return -1
+        index = len(self.channels)
+        self.channels.append(channel)
+        self.exact_indices[signature] = index
+        self.register_role(index, role)
+        return index
 
 
 # Generate a matrix for every frame of the animation to read out later
@@ -474,7 +688,7 @@ def quaternion_to_channel(quaternions, has_frames):
 
 # A channel is X Y Z values of postion, rotation or scale
 def get_channels(animations, version):
-    channels = []
+    deduplicator = ChannelDeduplicator(version)
     # Always add the empty position/scale channel first.
     chan = {'has_frames': False, 'keyframes': 1, 'base_x': 0, 'base_y': 0, 'base_z': 0, 'speed_x': 0.0, 'speed_y': 0.0,
             'speed_z': 0.0, 'offsets_x': [], 'offsets_y': [], 'offsets_z': []}
@@ -484,9 +698,9 @@ def get_channels(animations, version):
             'base_w': 1.0,
             'speed_w': 0.0,
         })
-    channels.append(chan)
+    deduplicator.add(chan, allow_approximate=False)
     if version == 6:
-        channels.append({
+        deduplicator.add({
             'has_frames': False,
             'type': 2,
             'keyframes': 1,
@@ -499,7 +713,7 @@ def get_channels(animations, version):
             'speed_y': 0.0,
             'speed_z': 0.0,
             'speed_w': 0.0,
-        })
+        }, role='rotation', allow_approximate=False)
     # Now cover all animation channels
     for animation in animations:
         for bone in animation['bone_data']:
@@ -514,10 +728,10 @@ def get_channels(animations, version):
                         'base_w': 1.0,
                         'speed_w': 0.0,
                     })
-                bone['channel_index_pos'] = check_duplicate_channel(channels, channel)
-                if bone['channel_index_pos'] == -1:
-                    bone['channel_index_pos'] = len(channels)
-                    channels.append(channel)
+                bone['channel_index_pos'] = deduplicator.add(
+                    channel,
+                    role='position',
+                )
             else:
                 bone['channel_index_pos'] = -1
 
@@ -532,10 +746,10 @@ def get_channels(animations, version):
                         matrix_channel['rotation'],
                         matrix_channel['rotation_frames'],
                     )
-                bone['channel_index_rot'] = check_duplicate_channel(channels, channel)
-                if bone['channel_index_rot'] == -1:
-                    bone['channel_index_rot'] = len(channels)
-                    channels.append(channel)
+                bone['channel_index_rot'] = deduplicator.add(
+                    channel,
+                    role='rotation',
+                )
             else:
                 bone['channel_index_rot'] = -1
 
@@ -547,13 +761,13 @@ def get_channels(animations, version):
                         'base_w': 1.0,
                         'speed_w': 0.0,
                     })
-                bone['channel_index_scale'] = check_duplicate_channel(channels, channel)
-                if bone['channel_index_scale'] == -1:
-                    bone['channel_index_scale'] = len(channels)
-                    channels.append(channel)
+                bone['channel_index_scale'] = deduplicator.add(
+                    channel,
+                    role='scale',
+                )
             else:
                 bone['channel_index_scale'] = -1
-    return channels
+    return deduplicator.channels
 
 
 def write_header(file, file_version, bone_names, animations, channels):

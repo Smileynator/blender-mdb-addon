@@ -172,6 +172,80 @@ def assert_curve_validation(export_canm):
     armature_obj.animation_data.nla_tracks.remove(track)
 
 
+def assert_channel_deduplication(export_canm):
+    position_a = export_canm.vector_to_channel(
+        [
+            mathutils.Vector((1.0, 2.0, 3.0)),
+            mathutils.Vector((2.0, 3.0, 4.0)),
+        ],
+        True,
+    )
+    position_close = export_canm.vector_to_channel(
+        [
+            mathutils.Vector((1.00001, 2.00001, 3.00001)),
+            mathutils.Vector((2.00001, 3.00001, 4.00001)),
+        ],
+        True,
+    )
+    position_far = export_canm.vector_to_channel(
+        [
+            mathutils.Vector((1.00003, 2.00003, 3.00003)),
+            mathutils.Vector((2.00003, 3.00003, 4.00003)),
+        ],
+        True,
+    )
+    deduplicator = export_canm.ChannelDeduplicator(5)
+    first_index = deduplicator.add(position_a, role="position")
+    assert deduplicator.add(
+        position_close,
+        role="position",
+    ) == first_index
+    assert deduplicator.add(
+        position_far,
+        role="position",
+    ) != first_index
+    assert deduplicator.add(
+        position_close,
+        role="scale",
+    ) != first_index
+
+    rotation_a = export_canm.vector_to_channel(
+        [mathutils.Vector((0.0, 0.0, 0.0))],
+        False,
+    )
+    rotation_equivalent = export_canm.vector_to_channel(
+        [mathutils.Vector((2.0 * math.pi, 0.0, 0.0))],
+        False,
+    )
+    rotation_deduplicator = export_canm.ChannelDeduplicator(5)
+    rotation_index = rotation_deduplicator.add(
+        rotation_a,
+        role="rotation",
+    )
+    assert rotation_deduplicator.add(
+        rotation_equivalent,
+        role="rotation",
+    ) == rotation_index
+
+    quaternion_a = export_canm.quaternion_to_channel(
+        [mathutils.Quaternion((1.0, 0.0, 0.0, 0.0))],
+        False,
+    )
+    quaternion_negated = export_canm.quaternion_to_channel(
+        [mathutils.Quaternion((-1.0, 0.0, 0.0, 0.0))],
+        False,
+    )
+    quaternion_deduplicator = export_canm.ChannelDeduplicator(6)
+    quaternion_index = quaternion_deduplicator.add(
+        quaternion_a,
+        role="rotation",
+    )
+    assert quaternion_deduplicator.add(
+        quaternion_negated,
+        role="rotation",
+    ) == quaternion_index
+
+
 def main():
     addon_root = Path(__file__).resolve().parents[1]
     load_addon(addon_root)
@@ -245,6 +319,7 @@ def main():
         mathutils.Matrix.Diagonal((2.0, 4.0, 6.0, 1.0))
     assert_scale_action_round_trip(export_canm, import_canm)
     assert_curve_validation(export_canm)
+    assert_channel_deduplication(export_canm)
 
     static_position = export_canm.vector_to_channel(
         [mathutils.Vector((1.0, 2.0, 3.0))],

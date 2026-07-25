@@ -37,10 +37,22 @@ def channel_count(path):
         return struct.unpack("<I", stream.read(4))[0]
 
 
+def export_version(path):
+    with path.open("rb") as stream:
+        stream.seek(4)
+        file_version = struct.unpack("<I", stream.read(4))[0]
+    return {0x200: 5, 0x300: 6}[file_version]
+
+
 def main():
     separator = sys.argv.index("--")
     mdb_path = Path(sys.argv[separator + 1]).resolve()
     canm_path = Path(sys.argv[separator + 2]).resolve()
+    requested_output = (
+        Path(sys.argv[separator + 3]).resolve()
+        if len(sys.argv) > separator + 3
+        else None
+    )
     addon_root = Path(__file__).resolve().parents[1]
     load_addon(addon_root)
     from _canm_roundtrip_benchmark import export_canm, import_canm, import_mdb
@@ -61,12 +73,14 @@ def main():
     imported = time.perf_counter()
 
     with tempfile.TemporaryDirectory() as temporary_directory:
-        output_path = Path(temporary_directory) / canm_path.name
+        output_path = requested_output or (
+            Path(temporary_directory) / canm_path.name
+        )
         assert export_canm.save(
             operator,
             bpy.context,
             filepath=str(output_path),
-            version=5,
+            version=export_version(canm_path),
         ) == {"FINISHED"}
         exported = time.perf_counter()
         source_count = channel_count(canm_path)
