@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from struct import unpack
 
+import bpy
 import mathutils
 
 
@@ -22,11 +23,126 @@ def load_addon(addon_root):
     spec.loader.exec_module(package)
 
 
+def assert_scale_action_round_trip(export_canm, import_canm):
+    armature = bpy.data.armatures.new("CANM scale test")
+    armature_obj = bpy.data.objects.new("CANM scale test", armature)
+    bpy.context.collection.objects.link(armature_obj)
+    bpy.context.view_layer.objects.active = armature_obj
+    armature_obj.select_set(True)
+    bpy.ops.object.mode_set(mode="EDIT")
+    edit_bone = armature.edit_bones.new("scale_bone")
+    edit_bone.head = (0.0, 0.0, 0.0)
+    edit_bone.tail = (0.0, 1.0, 0.0)
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+    scale_point = {
+        "base_x": 0.55,
+        "base_y": 0.98,
+        "base_z": 0.56,
+        "speed_x": (1.01 - 0.55) / 65535.0,
+        "speed_y": (1.00 - 0.98) / 65535.0,
+        "speed_z": (1.06 - 0.56) / 65535.0,
+        "keyframes": [
+            {"x": 0.0, "y": 0.0, "z": 0.0},
+            {"x": 65535.0, "y": 65535.0, "z": 65535.0},
+        ],
+    }
+    bone_animation = {
+        "bone_id": 0,
+        "point_trans_id": -1,
+        "point_rot_id": -1,
+        "point_scale_id": 0,
+    }
+    animation = {
+        "name": "scale_round_trip",
+        "loop": False,
+        "duration": 4.0,
+        "keyframes": 2,
+        "bone_data": [bone_animation],
+    }
+    canm = {
+        "bone_names": ["scale_bone"],
+        "anm_points": [scale_point],
+    }
+    pose_bone = armature_obj.pose.bones["scale_bone"]
+    import_canm.create_action_with_animation(
+        armature_obj,
+        animation,
+        canm,
+        [(0, pose_bone)],
+    )
+
+    action = armature_obj.animation_data.nla_tracks[-1].strips[0].action
+    exported_bone = export_canm.get_bone_data(
+        action,
+        canm["bone_names"],
+        [pose_bone],
+    )[0]
+    exported_scales = export_canm.get_matrix_channel_from_curves(
+        animation,
+        exported_bone,
+        5,
+    )["scale"]
+    expected_scales = (
+        mathutils.Vector((0.55, 0.98, 0.56)),
+        mathutils.Vector((1.01, 1.00, 1.06)),
+    )
+    for actual, expected in zip(exported_scales, expected_scales):
+        assert max(abs(actual[i] - expected[i]) for i in range(3)) < 1e-6
+
+    encoded_scale = export_canm.vector_to_channel(exported_scales, True)
+    decoded_scales = [
+        mathutils.Vector((
+            encoded_scale["base_x"] + x * encoded_scale["speed_x"],
+            encoded_scale["base_y"] + y * encoded_scale["speed_y"],
+            encoded_scale["base_z"] + z * encoded_scale["speed_z"],
+        ))
+        for x, y, z in zip(
+            encoded_scale["offsets_x"],
+            encoded_scale["offsets_y"],
+            encoded_scale["offsets_z"],
+        )
+    ]
+    for actual, expected in zip(decoded_scales, expected_scales):
+        assert max(abs(actual[i] - expected[i]) for i in range(3)) < 1e-5
+
+
 def main():
     addon_root = Path(__file__).resolve().parents[1]
     load_addon(addon_root)
 
     from _canm6_smoke import export_canm, import_canm
+
+    assert export_canm.calculate_frame_interval(12.0, 1) == 12.0
+    assert export_canm.calculate_frame_interval(12.0, 4) == 4.0
+
+    scale = import_canm.scale_matrix(2.0, 3.0, 4.0)
+    assert scale == mathutils.Matrix.Diagonal((2.0, 3.0, 4.0, 1.0))
+    assert scale @ mathutils.Vector((1.0, 1.0, 1.0, 1.0)) == \
+        mathutils.Vector((2.0, 3.0, 4.0, 1.0))
+    sampled_scale = import_canm.get_bone_matrix_of_frame(
+        {
+            "anm_points": [{
+                "base_x": 1.0,
+                "base_y": 2.0,
+                "base_z": 3.0,
+                "speed_x": 0.5,
+                "speed_y": 0.5,
+                "speed_z": 0.5,
+                "keyframes": [{"x": 2.0, "y": 4.0, "z": 6.0}],
+            }],
+        },
+        {
+            "point_trans_id": -1,
+            "point_rot_id": -1,
+            "point_scale_id": 0,
+        },
+        0,
+    )
+    assert sampled_scale["scale"]
+    assert sampled_scale["matrix"] == \
+        mathutils.Matrix.Diagonal((2.0, 4.0, 6.0, 1.0))
+    assert_scale_action_round_trip(export_canm, import_canm)
 
     static_position = export_canm.vector_to_channel(
         [mathutils.Vector((1.0, 2.0, 3.0))],

@@ -69,6 +69,14 @@ def get_bone_data(action, bone_names, pose_bones):
     return bones
 
 
+def calculate_frame_interval(duration, keyframe_count):
+    if keyframe_count <= 0:
+        raise ValueError('CANM animations must contain at least one keyframe')
+    if keyframe_count == 1:
+        return duration
+    return duration / (keyframe_count - 1)
+
+
 def get_animations(bone_names, pose_bones):
     actions = []
     for track in bpy.context.object.animation_data.nla_tracks:
@@ -82,7 +90,10 @@ def get_animations(bone_names, pose_bones):
         anim['duration'] = action['duration']
         anim['loop'] = action['loop']
         anim['keyframes'] = action['keyframes']
-        anim['between_keyframes'] = anim['duration'] / (anim['keyframes'] - 1)
+        anim['between_keyframes'] = calculate_frame_interval(
+            anim['duration'],
+            anim['keyframes'],
+        )
         anim['bone_data'] = get_bone_data(action, bone_names, pose_bones)
         animations.append(anim)
     return animations

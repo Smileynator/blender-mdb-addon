@@ -239,6 +239,10 @@ def quaternion_rotation_matrix(x, y, z, w):
     return mathutils.Quaternion((w, x, y, z)).to_matrix().to_4x4()
 
 
+def scale_matrix(x, y, z):
+    return mathutils.Matrix.Diagonal((x, y, z, 1.0))
+
+
 def get_bone_matrix_of_frame(canm, bone_anim, i):
     # Get animation data for this bone
     pos_anim = None
@@ -280,12 +284,12 @@ def get_bone_matrix_of_frame(canm, bone_anim, i):
                 z = mathutils.Matrix.Rotation(rot_anim['base_z'], 4, 'Z')
                 rot_mat = z @ y @ x
             set_rot = True
-        # Scale (untested!)
+        # Scale
         if scale_anim:
             x = scale_anim['base_x']
             y = scale_anim['base_y']
             z = scale_anim['base_z']
-            scale_mat = mathutils.Matrix.Scale(1, 4, Vector((x, y, z)))
+            scale_mat = scale_matrix(x, y, z)
             set_scale = True
     # If keyframes are present we override frame 0
     # Position
@@ -311,12 +315,12 @@ def get_bone_matrix_of_frame(canm, bone_anim, i):
             z = mathutils.Matrix.Rotation(rot_anim['base_z'] + rot_anim['keyframes'][i]['z'] * rot_anim['speed_z'], 4, 'Z')
             rot_mat = z @ y @ x
         set_rot = True
-    # Scale (untested!)
+    # Scale
     if scale_anim and len(scale_anim['keyframes']) > i:
         x = scale_anim['base_x'] + scale_anim['keyframes'][i]['x'] * scale_anim['speed_x']
         y = scale_anim['base_y'] + scale_anim['keyframes'][i]['y'] * scale_anim['speed_y']
         z = scale_anim['base_z'] + scale_anim['keyframes'][i]['z'] * scale_anim['speed_z']
-        scale_mat = mathutils.Matrix.Scale(1, 4, Vector((x, y, z)))
+        scale_mat = scale_matrix(x, y, z)
         set_scale = True
     # Final local offset matrix
     return_object = {
@@ -328,7 +332,12 @@ def get_bone_matrix_of_frame(canm, bone_anim, i):
     return return_object
 
 
-def create_action_with_animation(armature_obj, animation, canm):
+def create_action_with_animation(
+    armature_obj,
+    animation,
+    canm,
+    mapped_pose_bones,
+):
     bpy.context.view_layer.objects.active = armature_obj
     bpy.ops.object.mode_set(mode='POSE')
     # Create a new action for the animation and set it active
@@ -342,23 +351,19 @@ def create_action_with_animation(armature_obj, animation, canm):
     action['keyframes'] = animation['keyframes']
     # Get the actual max length of the animation
     keyframes = animation["keyframes"]
+    bone_data_by_id = {
+        bone_data['bone_id']: bone_data
+        for bone_data in animation['bone_data']
+    }
+    animated_pose_bones = [
+        (pose_bone, bone_data_by_id[bone_index])
+        for bone_index, pose_bone in mapped_pose_bones
+        if bone_index in bone_data_by_id
+    ]
     # For each keyframe, generate entire bone structure from the root upward
     for i in range(keyframes):
-        # Go over every bone in the armature
-        for pose_bone in armature_obj.pose.bones:
-            # Get the bone ID
-            try:
-                bone_index = canm['bone_names'].index(pose_bone.name)
-            except ValueError:
-                continue  # Skip the bone, unknown bone name
-            # Get the correct bone data if any
-            bone_anim = None
-            for bone_data in animation['bone_data']:
-                if bone_data['bone_id'] == bone_index:
-                    bone_anim = bone_data
-                    break
-            if bone_anim is None:
-                continue  # Skip the bone, no animations
+        # Go over every armature bone used by this animation.
+        for pose_bone, bone_anim in animated_pose_bones:
             # Get Bone Matrix
             matrix_result = get_bone_matrix_of_frame(canm, bone_anim, i)
             # Final local offset matrix
@@ -403,17 +408,30 @@ def load(operator, context, filepath='', **kwargs):
             armature_object = obj
             break
 
+    bone_index_by_name = {
+        bone_name: index
+        for index, bone_name in enumerate(canm['bone_names'])
+    }
+    mapped_pose_bones = [
+        (bone_index_by_name[pose_bone.name], pose_bone)
+        for pose_bone in armature_object.pose.bones
+        if pose_bone.name in bone_index_by_name
+    ]
+
     # Create animation timelines for each animation
     for animation in canm['animations']:
         # Create action for animation
-        create_action_with_animation(armature_object, animation, canm)
+        create_action_with_animation(
+            armature_object,
+            animation,
+            canm,
+            mapped_pose_bones,
+        )
 
     # Warn missing bones and append to armature object
-    # TODO Currently assumes the missing bones are identical in each animation
     # TODO will these ever have animations? If so we need to store those too.
     missing_bones = []
-    for bone_anim in canm['animations'][0]['bone_data']:
-        bone_name = canm['bone_names'][bone_anim['bone_id']]
+    for bone_name in canm['bone_names']:
         pose_bone = armature_object.pose.bones.get(bone_name)
         # Skip bones not found
         if not pose_bone:
