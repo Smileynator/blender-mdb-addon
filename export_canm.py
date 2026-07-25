@@ -2,6 +2,7 @@
 # Author: Smileynator
 
 import bpy
+import math
 import mathutils
 
 from struct import pack
@@ -31,6 +32,57 @@ def get_pose_bones(bone_names, armature_object):
     return bones
 
 
+def get_complete_transform_curves(
+    action,
+    bone_name,
+    property_name,
+    component_names,
+):
+    data_path = f'pose.bones["{bone_name}"].{property_name}'
+    curves = [
+        action.fcurves.find(data_path, index=index)
+        for index in range(len(component_names))
+    ]
+    present = [curve is not None for curve in curves]
+    if any(present) and not all(present):
+        missing = [
+            component_names[index]
+            for index, is_present in enumerate(present)
+            if not is_present
+        ]
+        raise ValueError(
+            f'Action {action.name!r}, bone {bone_name!r}: '
+            f'{property_name} is missing component curve(s) '
+            f'{", ".join(missing)}'
+        )
+    if not any(present):
+        return None
+    empty = [
+        component_names[index]
+        for index, curve in enumerate(curves)
+        if not curve.keyframe_points and not curve.modifiers
+    ]
+    if empty:
+        raise ValueError(
+            f'Action {action.name!r}, bone {bone_name!r}: '
+            f'{property_name} has empty component curve(s) '
+            f'{", ".join(empty)}'
+        )
+    return curves
+
+
+def curves_have_animation(curves):
+    return any(
+        curve.modifiers
+        or len(curve.keyframe_points) > 1
+        or (
+            len(curve.keyframe_points) == 1
+            and curve.keyframe_points[0].co.x != 1.0
+        )
+        for curve in curves
+    )
+
+
 def get_bone_data(action, bone_names, pose_bones):
     bones = []
     for bone_name in bone_names:
@@ -38,28 +90,47 @@ def get_bone_data(action, bone_names, pose_bones):
         bone['bone_name'] = bone_name
         bone['index'] = bone_names.index(bone['bone_name'])
         bone['pose_bone'] = pose_bones[bone['index']]
-        data_path_loc = f'pose.bones["{bone_name}"].location'
-        data_path_rot = f'pose.bones["{bone_name}"].rotation_quaternion'
-        data_path_scale = f'pose.bones["{bone_name}"].scale'
         # Position
-        loc_x = action.fcurves.find(data_path_loc, index=0)
-        loc_y = action.fcurves.find(data_path_loc, index=1)
-        loc_z = action.fcurves.find(data_path_loc, index=2)
-        if loc_x and loc_y and loc_z:
-            bone['position'] = [loc_x, loc_y, loc_z]
+        position = get_complete_transform_curves(
+            action,
+            bone_name,
+            'location',
+            'XYZ',
+        )
+        if position:
+            bone['position'] = position
         # Rotation
-        rot_w = action.fcurves.find(data_path_rot, index=0)
-        rot_x = action.fcurves.find(data_path_rot, index=1)
-        rot_y = action.fcurves.find(data_path_rot, index=2)
-        rot_z = action.fcurves.find(data_path_rot, index=3)
-        if rot_x and rot_y and rot_z and rot_w:
-            bone['rotation'] = [rot_w, rot_x, rot_y, rot_z]
+        rotation = get_complete_transform_curves(
+            action,
+            bone_name,
+            'rotation_quaternion',
+            'WXYZ',
+        )
+        if rotation:
+            bone['rotation'] = rotation
+        for property_name, component_count, label in (
+            ('rotation_euler', 3, 'Euler'),
+            ('rotation_axis_angle', 4, 'axis-angle'),
+        ):
+            data_path = f'pose.bones["{bone_name}"].{property_name}'
+            if any(
+                action.fcurves.find(data_path, index=index)
+                for index in range(component_count)
+            ):
+                raise ValueError(
+                    f'Action {action.name!r}, bone {bone_name!r}: {label} '
+                    'rotation curves are unsupported; bake or convert them '
+                    'to quaternion curves before CANM export'
+                )
         # Scale
-        scale_x = action.fcurves.find(data_path_scale, index=0)
-        scale_y = action.fcurves.find(data_path_scale, index=1)
-        scale_z = action.fcurves.find(data_path_scale, index=2)
-        if scale_x and scale_y and scale_z:
-            bone['scale'] = [scale_x, scale_y, scale_z]
+        scale = get_complete_transform_curves(
+            action,
+            bone_name,
+            'scale',
+            'XYZ',
+        )
+        if scale:
+            bone['scale'] = scale
         if not any(key in bone for key in ('position', 'rotation', 'scale')):
             bone['is_empty'] = True
         else:
@@ -96,6 +167,12 @@ def validate_channel_count(channels):
         )
 
 
+def report_export(operator, level, message):
+    if hasattr(operator, 'report'):
+        operator.report({level}, message)
+    print(f'{level}: {message}')
+
+
 def get_animations(bone_names, pose_bones):
     actions = []
     for track in bpy.context.object.animation_data.nla_tracks:
@@ -104,11 +181,33 @@ def get_animations(bone_names, pose_bones):
                 actions.append(strip.action)
     animations = []
     for action in actions:
+        missing_properties = [
+            name for name in ('duration', 'loop', 'keyframes')
+            if name not in action
+        ]
+        if missing_properties:
+            raise ValueError(
+                f'Action {action.name!r} is missing CANM metadata: '
+                + ', '.join(missing_properties)
+            )
+        duration = float(action['duration'])
+        if not math.isfinite(duration) or duration <= 0.0:
+            raise ValueError(
+                f'Action {action.name!r} has invalid CANM duration '
+                f'{duration!r}'
+            )
+        keyframes_value = action['keyframes']
+        keyframes = int(keyframes_value)
+        if keyframes != keyframes_value or keyframes <= 0:
+            raise ValueError(
+                f'Action {action.name!r} has invalid CANM sample count '
+                f'{keyframes_value!r}'
+            )
         anim = {}
         anim['name'] = action.name
-        anim['duration'] = action['duration']
-        anim['loop'] = action['loop']
-        anim['keyframes'] = action['keyframes']
+        anim['duration'] = duration
+        anim['loop'] = bool(action['loop'])
+        anim['keyframes'] = keyframes
         anim['between_keyframes'] = calculate_frame_interval(
             anim['duration'],
             anim['keyframes'],
@@ -181,15 +280,15 @@ def get_matrix_channel_from_curves(animation, bone, version):
     scl_has_frames = False
     if 'position' in bone:
         pos_curves = bone['position']
-        pos_has_frames = not(len(pos_curves[0].keyframe_points) == 1 and pos_curves[0].keyframe_points[0].co.x == 1.0)
+        pos_has_frames = curves_have_animation(pos_curves)
         matrix_channels['position_frames'] = pos_has_frames
     if 'rotation' in bone:
         rot_curves = bone['rotation']
-        rot_has_frames = not(len(rot_curves[0].keyframe_points) == 1 and rot_curves[0].keyframe_points[0].co.x == 1.0)
+        rot_has_frames = curves_have_animation(rot_curves)
         matrix_channels['rotation_frames'] = rot_has_frames
     if 'scale' in bone:
         scl_curves = bone['scale']
-        scl_has_frames = not(len(scl_curves[0].keyframe_points) == 1 and scl_curves[0].keyframe_points[0].co.x == 1.0)
+        scl_has_frames = curves_have_animation(scl_curves)
         matrix_channels['scale_frames'] = scl_has_frames
 
     # Create actual matrix per frame
@@ -231,6 +330,19 @@ def get_matrix_channel_from_curves(animation, bone, version):
                 y = scl_curves[1].evaluate(i+1)
                 z = scl_curves[2].evaluate(i+1)
             scl = mathutils.Vector((x, y, z))
+        sampled_values = tuple(pos) + tuple(rot) + tuple(scl)
+        if not all(math.isfinite(value) for value in sampled_values):
+            raise ValueError(
+                f'Action {animation["name"]!r}, bone '
+                f'{bone["bone_name"]!r}, sample {i + 1}: transform contains '
+                'a non-finite value'
+            )
+        if rot.dot(rot) == 0.0:
+            raise ValueError(
+                f'Action {animation["name"]!r}, bone '
+                f'{bone["bone_name"]!r}, sample {i + 1}: rotation quaternion '
+                'has zero length'
+            )
         # Get bone local base matrix
         if bone['pose_bone'] is not None:
             bone_local_matrix = bone['pose_bone'].bone.matrix_local
@@ -620,7 +732,7 @@ def save(operator, context, filepath="", version=0, **kwargs):
     # Get the armature
     armature = bpy.data.armatures[0]
     if not armature:
-        print("Armature not found")
+        report_export(operator, 'ERROR', 'CANM export: armature not found')
         return {'CANCELLED'}
     armature_object = None
     for obj in bpy.data.objects:
@@ -628,15 +740,38 @@ def save(operator, context, filepath="", version=0, **kwargs):
             armature_object = obj
             break
     if armature_object is None:
-        print("Armature Object not found")
+        report_export(
+            operator,
+            'ERROR',
+            'CANM export: armature object not found',
+        )
         return {'CANCELLED'}
-    # Gather all the file parts
-    missing_bones = armature_object.get('missing_bones')
-    bone_names = get_bone_names(missing_bones)
-    pose_bones = get_pose_bones(bone_names, armature_object)
-    animations = get_animations(bone_names, pose_bones)
-    channels = get_channels(animations, version)
-    validate_channel_count(channels)
+    try:
+        # Gather and validate all file parts before opening the destination.
+        missing_bones = armature_object.get('missing_bones')
+        bone_names = get_bone_names(missing_bones)
+        pose_bones = get_pose_bones(bone_names, armature_object)
+        animations = get_animations(bone_names, pose_bones)
+        if version == 5:
+            oversized = [
+                animation['name']
+                for animation in animations
+                if animation['keyframes'] > 0xFFFF
+            ]
+            if oversized:
+                raise ValueError(
+                    'EDF5 channels support at most 65,535 samples; '
+                    'over-limit action(s): ' + ', '.join(oversized[:8])
+                )
+        channels = get_channels(animations, version)
+        validate_channel_count(channels)
+    except (KeyError, OverflowError, TypeError, ValueError) as error:
+        report_export(
+            operator,
+            'ERROR',
+            f'CANM export cancelled: {error}',
+        )
+        return {'CANCELLED'}
     with open(filepath, 'wb') as file:
         # Header
         write_header(file, file_version, bone_names, animations, channels)

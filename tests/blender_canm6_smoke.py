@@ -4,11 +4,20 @@ import importlib.util
 import io
 import math
 import sys
+import tempfile
 from pathlib import Path
 from struct import unpack
 
 import bpy
 import mathutils
+
+
+class Operator:
+    def __init__(self):
+        self.messages = []
+
+    def report(self, levels, message):
+        self.messages.append((levels, message))
 
 
 def load_addon(addon_root):
@@ -107,6 +116,62 @@ def assert_scale_action_round_trip(export_canm, import_canm):
         assert max(abs(actual[i] - expected[i]) for i in range(3)) < 1e-5
 
 
+def assert_curve_validation(export_canm):
+    armature_obj = bpy.data.objects["CANM scale test"]
+    pose_bone = armature_obj.pose.bones["scale_bone"]
+
+    partial_action = bpy.data.actions.new("partial_location")
+    partial_action["duration"] = 4.0
+    partial_action["loop"] = False
+    partial_action["keyframes"] = 2
+    partial_action.fcurves.new(
+        'pose.bones["scale_bone"].location',
+        index=0,
+    ).keyframe_points.insert(1.0, 0.0)
+    try:
+        export_canm.get_bone_data(
+            partial_action,
+            ["scale_bone"],
+            [pose_bone],
+        )
+    except ValueError as error:
+        assert "missing component curve(s) Y, Z" in str(error)
+    else:
+        raise AssertionError("Partial XYZ curves were silently accepted")
+
+    complete_action = bpy.data.actions.new("yz_animated_scale")
+    scale_curves = []
+    for index in range(3):
+        curve = complete_action.fcurves.new(
+            'pose.bones["scale_bone"].scale',
+            index=index,
+        )
+        curve.keyframe_points.insert(1.0, 1.0)
+        scale_curves.append(curve)
+    scale_curves[1].keyframe_points.insert(2.0, 1.5)
+    assert export_canm.curves_have_animation(scale_curves)
+
+    track = armature_obj.animation_data.nla_tracks.new()
+    track.name = partial_action.name
+    track.strips.new(partial_action.name, 1, partial_action)
+    operator = Operator()
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        output_path = Path(temporary_directory) / "invalid.CANM"
+        result = export_canm.save(
+            operator,
+            bpy.context,
+            filepath=str(output_path),
+            version=5,
+        )
+        assert result == {"CANCELLED"}
+        assert not output_path.exists()
+    assert any(
+        "missing component curve(s) Y, Z" in message
+        for _, message in operator.messages
+    )
+    armature_obj.animation_data.nla_tracks.remove(track)
+
+
 def main():
     addon_root = Path(__file__).resolve().parents[1]
     load_addon(addon_root)
@@ -179,6 +244,7 @@ def main():
     assert sampled_scale["matrix"] == \
         mathutils.Matrix.Diagonal((2.0, 4.0, 6.0, 1.0))
     assert_scale_action_round_trip(export_canm, import_canm)
+    assert_curve_validation(export_canm)
 
     static_position = export_canm.vector_to_channel(
         [mathutils.Vector((1.0, 2.0, 3.0))],
