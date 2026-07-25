@@ -4,6 +4,23 @@ Blender version supported: 3.6
 No guarantees on other versions, but also tested and working on 4.0 and 4.1.1
 If you post your issues in other versions or any other problems you run into, i will see what i can do, reach out to me on the EDF discord.
 
+## How to mod
+I assume the main use of this tool is to "get something into EDF 5 or 6". So here is a short list of pointers on how to achieve that.
+ - Begin with a model closest to what you need from the game. 
+   - Need a new playable character in EDF5? Import the ranger from EDF5.
+   - Need a new gun for EDF6? Import a rifle from EDF6.
+ - Alter/Remove/Replace the original meshes or animations
+   - Do not rename anything, try to not introduce new shaders, do not touch the skeleton at all
+   - The game is very picky, and uses name lookups, and special values that i have to persist through blender
+   - Losing those special values or the exact naming the game expects, can cause things to behave in unexpected ways, or usually just break
+ - Do a quick export with minimal changes to check if nothing broke immediately
+ - Finally, re-skin the mesh to the existing skeleton bones
+ - Do a final export and enjoy your modded content in the game!
+
+For more details you can read into the many notes I provide below, in theory we can edit a lot, including the bones.
+The problem is that editing the bones also means editing the animations, and certain bones are mandatory, but you will never know which ones until they are gone and the game breaks.
+We are actively working on more and more support on the topic, but for now enjoy what we have, and push the envelope!
+
 ## Download
 https://github.com/Smileynator/blender-mdb-addon/archive/refs/heads/master.zip
 
@@ -23,14 +40,14 @@ Very little error catching has been implemented, so expect some problems.
 ## Usage Notes
 ![image](https://github.com/Smileynator/blender-mdb-addon/assets/3433068/376663dc-c9ad-4190-a082-b8511b399f11)
 - Install blender-mdb-addon-master.zip in Blender Preferences.
-- Enable "Import-Export: Earth Defeense Force Formats" and save preferences.
+- Enable "Import-Export: Earth Defense Force Formats" and save preferences.
 - Import .mdb under "File->Import->Earth Defense Force Model (.mdb)"
 - Export .mdb under "File->Export->Earth Defense Force Model (.mdb)"
 - Import .canm under "File->Import->Earth Defense Force Animation (.canm)"
 - Export .canm under the separate EDF5 and EDF6 animation entries in "File->Export"
 
 # MDB Notes
-MDB export requires every face to be triangulated. Export is cancelled before writing if any quad or n-gon remains.
+MDB export requires every face to be triangulated. Export is canceled before writing if any quad or n-gon remains.
 
 Each exported mesh must have exactly one non-empty material slot. MDB mesh
 records reference one material, so meshes with no material or multiple Blender
@@ -43,10 +60,10 @@ list. Please include the source MDB when reporting this error.
 
 The exporter enforces the game's four-influence vertex limit. When a vertex has more than four positive bone weights, the four strongest are retained and normalized. Meshes with an Armature modifier but no actual positive weights are exported without unnecessary blend-index and blend-weight channels.
 Weighted vertex groups are matched to MDB bones by name rather than Blender
-group order. Export is cancelled when a positively weighted group has no
+group order. Export is canceled when a positively weighted group has no
 matching bone. The bone table can contain more than 256 entries, but the
 format's 8-bit blend indices can only weight vertices to bones at indices
-0-255; export is cancelled if a mesh weights a later bone.
+0-255; export is canceled if a mesh weights a later bone.
 
 Blender stores UVs and split normals per face corner while MDB stores them per vertex. Export therefore splits vertices where UVs, normals, or tangent-space data differ so seams remain intact.
 The resulting exported vertex indices are 16-bit. A mesh that exceeds 65,536
@@ -121,7 +138,7 @@ Animations have Scale support in theory, but the game rarely uses it, so it is l
 
 Animations during export are optimized to minimize filesize and prevent channel overflow. To not run into the channel limitation, any bone that does not need pos/rot/scale, should delete those curves entirely. If you only need a starting value, stick to 1 keyframe at frame 1. This allows them to be optimized further. Values are rounded to the closest 2e-06, though this should not be practically visible to anyone.
 
-The export will sample an Fcurve per increment of 1, until it reached the amount of keyframes the animation is supposed to have.
+The export will sample a Fcurve per increment of 1, until it reached the amount of keyframes the animation is supposed to have.
 Importing creates 1 keyframe per frame. however this is not required for export, so you can safely delete a few frames to make animation easier.
 
 Keep in mind that animations are being interpolated between by the game's CAS file. This means that unless CAS files are properly edited, removing entire animations or adding completely new animations instead of replacing existing ones, will likely cause problems.
