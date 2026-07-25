@@ -9,12 +9,13 @@ I assume the main use of this tool is to "get something into EDF 5 or 6". So her
  - Begin with a model closest to what you need from the game. 
    - Need a new playable character in EDF5? Import the ranger from EDF5.
    - Need a new gun for EDF6? Import a rifle from EDF6.
- - Alter/Remove/Replace the original meshes or animations
+ - Alter/Replace the original meshes or animations
    - Do not rename anything, try to not introduce new shaders, do not touch the skeleton at all
-   - The game is very picky, and uses name lookups, and special values that i have to persist through blender
+   - Removing or introducing something completely new besides meshes, is usually not a good idea!
+   - The game is very picky. It uses specific name lookups, and special values that i have to persist through blender
    - Losing those special values or the exact naming the game expects, can cause things to behave in unexpected ways, or usually just break
  - Do a quick export with minimal changes to check if nothing broke immediately
- - Finally, re-skin the mesh to the existing skeleton bones
+ - Finally, re-skin/weight paint and UV map the altered mesh to the existing skeleton bones if necessary
  - Do a final export and enjoy your modded content in the game!
 
 For more details you can read into the many notes I provide below, in theory we can edit a lot, including the bones.
