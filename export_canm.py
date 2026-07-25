@@ -77,6 +77,25 @@ def calculate_frame_interval(duration, keyframe_count):
     return duration / (keyframe_count - 1)
 
 
+def encode_channel_index(index):
+    if index == -1:
+        return 0xFFFF
+    if not 0 <= index < 0xFFFF:
+        raise ValueError(
+            f'CANM channel index {index} is outside the usable '
+            'unsigned 16-bit range 0..65534'
+        )
+    return index
+
+
+def validate_channel_count(channels):
+    if len(channels) > 0xFFFF:
+        raise ValueError(
+            f'CANM contains {len(channels)} unique channels; the format '
+            'can reference at most 65,535'
+        )
+
+
 def get_animations(bone_names, pose_bones):
     actions = []
     for track in bpy.context.object.animation_data.nla_tracks:
@@ -548,9 +567,9 @@ def write_animations(file, animations):
         rewrite_offset(file, anim['bone_data_pos'], file.tell(), anim['base_pos'])
         for bone in anim['bone_data']:
             file.write(pack('h', bone['index']))
-            file.write(pack('h', bone['channel_index_pos']))
-            file.write(pack('h', bone['channel_index_rot']))
-            file.write(pack('h', bone['channel_index_scale']))
+            file.write(pack('H', encode_channel_index(bone['channel_index_pos'])))
+            file.write(pack('H', encode_channel_index(bone['channel_index_rot'])))
+            file.write(pack('H', encode_channel_index(bone['channel_index_scale'])))
 
 
 def write_all_strings(file, bone_names, animations):
@@ -617,6 +636,7 @@ def save(operator, context, filepath="", version=0, **kwargs):
     pose_bones = get_pose_bones(bone_names, armature_object)
     animations = get_animations(bone_names, pose_bones)
     channels = get_channels(animations, version)
+    validate_channel_count(channels)
     with open(filepath, 'wb') as file:
         # Header
         write_header(file, file_version, bone_names, animations, channels)

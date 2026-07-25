@@ -115,6 +115,42 @@ def main():
 
     assert export_canm.calculate_frame_interval(12.0, 1) == 12.0
     assert export_canm.calculate_frame_interval(12.0, 4) == 4.0
+    assert export_canm.encode_channel_index(-1) == 0xFFFF
+    assert export_canm.encode_channel_index(0x8000) == 0x8000
+    assert export_canm.encode_channel_index(0xFFFE) == 0xFFFE
+    for invalid_index in (-2, 0xFFFF):
+        try:
+            export_canm.encode_channel_index(invalid_index)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"Invalid channel index {invalid_index} was accepted"
+            )
+    export_canm.validate_channel_count([None] * 0xFFFF)
+    try:
+        export_canm.validate_channel_count([None] * 0x10000)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("65,536 CANM channels were accepted")
+    animation_bytes = io.BytesIO()
+    export_canm.write_animations(animation_bytes, [{
+        "loop": False,
+        "duration": 4.0,
+        "between_keyframes": 4.0,
+        "keyframes": 2,
+        "bone_data": [{
+            "index": 7,
+            "channel_index_pos": 0x8000,
+            "channel_index_rot": 0xFFFE,
+            "channel_index_scale": -1,
+        }],
+    }])
+    assert unpack(
+        "<hHHH",
+        animation_bytes.getvalue()[0x1C:0x24],
+    ) == (7, 0x8000, 0xFFFE, 0xFFFF)
 
     scale = import_canm.scale_matrix(2.0, 3.0, 4.0)
     assert scale == mathutils.Matrix.Diagonal((2.0, 3.0, 4.0, 1.0))
