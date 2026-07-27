@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Earth Defense Force Formats",
     "author": "Smileynator / BlueAmulet / Ktaro",
-    "version": (1, 8, 2),
+    "version": (1, 9, 0),
     "blender": (3, 6, 0),
     "location": "File > Import-Export",
     "description": "Import-Export MDB, CANM, mesh, UV's, materials, textures, Animations from Earth Defense Force",
@@ -21,9 +21,12 @@ if "bpy" in locals():
         importlib.reload(import_canm)
     if "export_canm" in locals():
         importlib.reload(export_canm)
+    if "additive_editing" in locals():
+        importlib.reload(additive_editing)
 
 
 import bpy
+from . import additive_editing
 from bpy.props import (
         StringProperty,
         IntProperty,
@@ -239,6 +242,7 @@ classes = (
     ImportCANM,
     ExportCANM_5,
     ExportCANM_6,
+    *additive_editing.CLASSES,
 )
 
 

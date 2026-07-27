@@ -14,6 +14,7 @@ from struct import pack, unpack
 # within these role-specific bounds of the stored representative.
 VECTOR_MERGE_TOLERANCE = 2e-5
 ROTATION_MERGE_TOLERANCE_RADIANS = math.radians(0.005)
+ADDITIVE_PREVIEW_FLAG = "edf_additive_edit_preview"
 
 
 def get_bone_names(missing_bones):
@@ -189,6 +190,11 @@ def get_animations(bone_names, pose_bones):
                 actions.append(strip.action)
     animations = []
     for action in actions:
+        if action.get(ADDITIVE_PREVIEW_FLAG, False):
+            raise ValueError(
+                f'Action {action.name!r} is a temporary additive-editing '
+                'preview. Save or cancel additive editing before CANM export'
+            )
         missing_properties = [
             name for name in ('duration', 'loop', 'keyframes')
             if name not in action
@@ -958,6 +964,14 @@ def save(operator, context, filepath="", version=0, **kwargs):
             operator,
             'ERROR',
             'CANM export: armature object not found',
+        )
+        return {'CANCELLED'}
+    if armature_object.get('edf_additive_edit_session'):
+        report_export(
+            operator,
+            'ERROR',
+            'CANM export cancelled: save or cancel the active additive '
+            'editing session first',
         )
         return {'CANCELLED'}
     try:

@@ -153,6 +153,40 @@ Custom Properties you should know about:
   - Loop - Intention for the animation to be able to loop or not
   - Keyframes - Amount of keyframes in the animation (regardless if they actually exist or not, cannot be below 2)
 
+### Editing additive animations
+
+CANM does not store an additive flag. CAS decides whether a CANM clip is
+composed on top of another pose. Imported additive clips therefore round-trip
+correctly but usually look distorted when Blender displays them as ordinary
+standalone actions.
+
+Select the armature and open **3D Viewport > Sidebar > Animation > EDF Additive
+Animation**:
+
+1. Choose **Start Additive Editing**.
+2. Select the imported additive Action and a normal base Action.
+3. Choose **Animated Action** to sample the base in CANM engine time, or
+   **Fixed Frame** to hold one base sample for the whole edit.
+4. Edit the generated `[Additive Edit]` Action as an ordinary pose animation.
+5. Choose **Save Additive Editing** to convert the edited pose back into the
+   original additive Action. **Cancel Additive Editing** discards the preview.
+
+The source Action and all NLA tracks are left untouched until Save is chosen.
+Their previous mute state is restored afterwards. Only translation and
+quaternion-rotation channels already present in the source additive Action are
+written back; this prevents an accidental pose or keyframe from introducing
+new CANM bone channels. Save stops with a clear error if the preview changed a
+base-only, new, or scale channel, rather than silently discarding that edit.
+Undo that channel edit or cancel the session. Additive scale curves are
+preserved unchanged because CAS tag `0x08` takes scale from the base pose
+rather than the additive operand.
+
+Do not rename or delete the source, base, or preview Action during an editing
+session, or edit the source/base Action through another editor. Save detects
+those changes and stops rather than combining incompatible data. Complete or
+cancel the session before exporting. The exporter rejects temporary additive
+previews if one has manually been placed in an NLA track.
+
 
 ## Extra Tools, Docs, and Links
 Other Tools: https://github.com/KCreator/Earth-Defence-Force-Documentation/wiki/Tools
