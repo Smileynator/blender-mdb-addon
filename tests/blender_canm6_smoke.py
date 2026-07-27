@@ -116,6 +116,162 @@ def assert_scale_action_round_trip(export_canm, import_canm):
         assert max(abs(actual[i] - expected[i]) for i in range(3)) < 1e-5
 
 
+def assert_direct_curve_construction_matches_pose_insertion(import_canm):
+    armature = bpy.data.armatures.new("CANM direct curve test")
+    armature_obj = bpy.data.objects.new("CANM direct curve test", armature)
+    bpy.context.collection.objects.link(armature_obj)
+    bpy.context.view_layer.objects.active = armature_obj
+    for obj in bpy.context.selected_objects:
+        obj.select_set(False)
+    armature_obj.select_set(True)
+    bpy.ops.object.mode_set(mode="EDIT")
+    parent = armature.edit_bones.new("direct_parent")
+    parent.head = (0.4, -0.2, 0.3)
+    parent.tail = (0.7, 1.1, 0.5)
+    parent.roll = math.radians(21.0)
+    child = armature.edit_bones.new("direct_child")
+    child.parent = parent
+    child.head = (0.7, 1.1, 0.5)
+    child.tail = (1.2, 2.0, 0.9)
+    child.roll = math.radians(-14.0)
+    bpy.ops.object.mode_set(mode="POSE")
+    pose_bones = [
+        armature_obj.pose.bones["direct_parent"],
+        armature_obj.pose.bones["direct_child"],
+    ]
+
+    vector_frames = [
+        {"x": 0.0, "y": 0.0, "z": 0.0},
+        {"x": 1.0, "y": 2.0, "z": 3.0},
+        {"x": 2.0, "y": 4.0, "z": 6.0},
+    ]
+    quaternion_frames = []
+    for angle in (5.0, 25.0, 55.0):
+        value = mathutils.Quaternion(
+            (0.2, 0.8, 0.4),
+            math.radians(angle),
+        )
+        quaternion_frames.append({
+            "x": value.x,
+            "y": value.y,
+            "z": value.z,
+            "w": value.w,
+        })
+    canm = {
+        "anm_points": [
+            {
+                "type": 1,
+                "base_x": 1.0,
+                "base_y": -2.0,
+                "base_z": 0.5,
+                "speed_x": 0.2,
+                "speed_y": 0.1,
+                "speed_z": -0.05,
+                "keyframes": vector_frames,
+            },
+            {
+                "type": 3,
+                "base_x": 0.0,
+                "base_y": 0.0,
+                "base_z": 0.0,
+                "base_w": 1.0,
+                "keyframes": quaternion_frames,
+            },
+            {
+                "type": 1,
+                "base_x": 0.9,
+                "base_y": 1.0,
+                "base_z": 1.1,
+                "speed_x": 0.02,
+                "speed_y": -0.01,
+                "speed_z": 0.03,
+                "keyframes": vector_frames,
+            },
+        ],
+    }
+    bone_data = [
+        {
+            "bone_id": index,
+            "point_trans_id": 0,
+            "point_rot_id": 1,
+            "point_scale_id": 2,
+        }
+        for index in range(2)
+    ]
+    animation = {
+        "name": "direct_curve_equivalence",
+        "loop": False,
+        "duration": 8.0,
+        "keyframes": 3,
+        "bone_data": bone_data,
+    }
+
+    expected = {}
+    for frame_index in range(3):
+        for pose_bone, bone_anim in zip(pose_bones, bone_data):
+            result = import_canm.get_bone_matrix_of_frame(
+                canm,
+                bone_anim,
+                frame_index,
+            )
+            parent_matrix = (
+                pose_bone.parent.matrix
+                if pose_bone.parent
+                else mathutils.Matrix.Identity(4)
+            )
+            pose_bone.matrix = parent_matrix @ result["matrix"]
+            expected[(pose_bone.name, frame_index + 1)] = (
+                pose_bone.location.copy(),
+                pose_bone.rotation_quaternion.copy(),
+                pose_bone.scale.copy(),
+            )
+    for pose_bone in pose_bones:
+        pose_bone.matrix_basis = mathutils.Matrix.Identity(4)
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+    import_canm.create_action_with_animation(
+        armature_obj,
+        animation,
+        canm,
+        list(enumerate(pose_bones)),
+    )
+    action = armature_obj.animation_data.nla_tracks[-1].strips[0].action
+    for pose_bone in pose_bones:
+        paths = {
+            property_name: [
+                action.fcurves.find(
+                    f'pose.bones["{pose_bone.name}"].{property_name}',
+                    index=index,
+                )
+                for index in range(component_count)
+            ]
+            for property_name, component_count in (
+                ("location", 3),
+                ("rotation_quaternion", 4),
+                ("scale", 3),
+            )
+        }
+        for frame in range(1, 4):
+            expected_location, expected_rotation, expected_scale = expected[
+                (pose_bone.name, frame)
+            ]
+            actual_location = mathutils.Vector(
+                curve.evaluate(frame) for curve in paths["location"]
+            )
+            actual_rotation = mathutils.Quaternion(
+                curve.evaluate(frame)
+                for curve in paths["rotation_quaternion"]
+            )
+            actual_scale = mathutils.Vector(
+                curve.evaluate(frame) for curve in paths["scale"]
+            )
+            assert (actual_location - expected_location).length < 1e-5
+            assert abs(actual_rotation.normalized().dot(
+                expected_rotation.normalized()
+            )) > 1.0 - 1e-6
+            assert (actual_scale - expected_scale).length < 1e-5
+
+
 def assert_curve_validation(export_canm):
     armature_obj = bpy.data.objects["CANM scale test"]
     pose_bone = armature_obj.pose.bones["scale_bone"]
@@ -320,6 +476,7 @@ def main():
     assert_scale_action_round_trip(export_canm, import_canm)
     assert_curve_validation(export_canm)
     assert_channel_deduplication(export_canm)
+    assert_direct_curve_construction_matches_pose_insertion(import_canm)
 
     static_position = export_canm.vector_to_channel(
         [mathutils.Vector((1.0, 2.0, 3.0))],

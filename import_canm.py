@@ -332,24 +332,54 @@ def get_bone_matrix_of_frame(canm, bone_anim, i):
     return return_object
 
 
+def local_rest_matrix(pose_bone):
+    matrix = pose_bone.bone.matrix_local.copy()
+    if pose_bone.parent is not None:
+        matrix = (
+            pose_bone.parent.bone.matrix_local.inverted_safe()
+            @ matrix
+        )
+    return matrix
+
+
+def create_sampled_fcurves(
+    action,
+    pose_bone,
+    property_name,
+    component_count,
+    samples,
+):
+    """Create a complete transform channel without live pose evaluation."""
+    data_path = f'pose.bones["{pose_bone.name}"].{property_name}'
+    for component_index in range(component_count):
+        curve = action.fcurves.new(
+            data_path,
+            index=component_index,
+            action_group=pose_bone.name,
+        )
+        curve.keyframe_points.add(len(samples))
+        coordinates = []
+        for frame, values in samples:
+            coordinates.extend((float(frame), float(values[component_index])))
+        curve.keyframe_points.foreach_set('co', coordinates)
+        curve.update()
+
+
 def create_action_with_animation(
     armature_obj,
     animation,
     canm,
     mapped_pose_bones,
 ):
-    bpy.context.view_layer.objects.active = armature_obj
-    bpy.ops.object.mode_set(mode='POSE')
-    # Create a new action for the animation and set it active
+    # Construct F-curves directly. Assigning every sampled matrix to the live
+    # pose and calling keyframe_insert forces Blender to repeatedly evaluate
+    # the dependency graph and is prohibitively expensive for large CANMs.
     action = bpy.data.actions.new(name=animation['name'])
     if armature_obj.animation_data is None:
         armature_obj.animation_data_create()
-    armature_obj.animation_data.action = action
-    # Set custom properties up
     action['loop'] = animation['loop']
     action['duration'] = animation['duration']
     action['keyframes'] = animation['keyframes']
-    # Get the actual max length of the animation
     keyframes = animation["keyframes"]
     bone_data_by_id = {
         bone_data['bone_id']: bone_data
@@ -360,36 +390,58 @@ def create_action_with_animation(
         for bone_index, pose_bone in mapped_pose_bones
         if bone_index in bone_data_by_id
     ]
-    # For each keyframe, generate entire bone structure from the root upward
-    for i in range(keyframes):
-        # Go over every armature bone used by this animation.
-        for pose_bone, bone_anim in animated_pose_bones:
-            # Get Bone Matrix
+
+    for pose_bone, bone_anim in animated_pose_bones:
+        rest_inverse = local_rest_matrix(pose_bone).inverted_safe()
+        position_samples = []
+        rotation_samples = []
+        scale_samples = []
+        previous_rotation = None
+        for i in range(keyframes):
             matrix_result = get_bone_matrix_of_frame(canm, bone_anim, i)
-            # Final local offset matrix
-            new_bone_matrix = matrix_result['matrix']
-            # Get the parent bone matrix
-            if pose_bone.parent:
-                parent_bone_matrix = pose_bone.parent.matrix
-            else:
-                parent_bone_matrix = mathutils.Matrix.Identity(4)
-            # Set bone matrix and save keyframes
-            pose_bone.matrix = parent_bone_matrix @ new_bone_matrix
-            # These need +1 because setting frame 0 and frame 1, both result in frame 1 being set.
+            basis_matrix = rest_inverse @ matrix_result['matrix']
+            position, rotation, scale = basis_matrix.decompose()
+            if previous_rotation is not None and rotation.dot(previous_rotation) < 0:
+                rotation.negate()
+            previous_rotation = rotation.copy()
+            frame = i + 1
             if matrix_result['pos']:
-                pose_bone.keyframe_insert(data_path='location', frame=i+1, group=pose_bone.name)
+                position_samples.append((frame, tuple(position)))
             if matrix_result['rot']:
-                pose_bone.keyframe_insert(data_path='rotation_quaternion', frame=i+1, group=pose_bone.name)
+                rotation_samples.append((
+                    frame,
+                    (rotation.w, rotation.x, rotation.y, rotation.z),
+                ))
             if matrix_result['scale']:
-                pose_bone.keyframe_insert(data_path='scale', frame=i+1, group=pose_bone.name)
-    # Reset all bone poses
-    for pose_bone in armature_obj.pose.bones:
-        pose_bone.matrix_basis = mathutils.Matrix.Identity(4)
-    # Push action to NLA track and clear the current track
+                scale_samples.append((frame, tuple(scale)))
+        if position_samples:
+            create_sampled_fcurves(
+                action,
+                pose_bone,
+                'location',
+                3,
+                position_samples,
+            )
+        if rotation_samples:
+            create_sampled_fcurves(
+                action,
+                pose_bone,
+                'rotation_quaternion',
+                4,
+                rotation_samples,
+            )
+        if scale_samples:
+            create_sampled_fcurves(
+                action,
+                pose_bone,
+                'scale',
+                3,
+                scale_samples,
+            )
+
     track = armature_obj.animation_data.nla_tracks.new()
     track.strips.new(action.name, 1, action)
     track.name = animation['name']
-    armature_obj.animation_data.action = None
 
 
 def load(operator, context, filepath='', **kwargs):
