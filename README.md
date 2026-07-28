@@ -3,6 +3,8 @@ Blender model/animation importer/exporter for Earth Defense Force 5 and 6 .mdb a
 Blender version supported: 3.6
 No guarantees on other versions, but also tested and working on 4.0 and 4.1.1
 If you post your issues in other versions or any other problems you run into, i will see what i can do, reach out to me on the EDF discord.
+<img width="1495" height="783" alt="image" src="https://github.com/user-attachments/assets/5c73239b-4ae8-416a-889c-83685a706b1e" />
+
 
 ## How to mod
 I assume the main use of this tool is to "get something into EDF 5 or 6". So here is a short list of pointers on how to achieve that.
@@ -155,7 +157,7 @@ Animation**:
 4. Edit the generated `[Additive Edit]` Action as an ordinary pose animation.
 5. Choose **Save Additive Editing** to convert the edited curves back into the
    original additive Action. **Cancel Additive Editing** discards the preview.
-
+<img width="1277" height="661" alt="image" src="https://github.com/user-attachments/assets/5cfcc5ef-d62e-4e1d-9b74-b036f851288d" />
 The source Action and all NLA tracks are left untouched until Save is chosen.
 Their previous mute state is restored afterward. Only translation and
 quaternion-rotation channels already present in the source additive Action are
