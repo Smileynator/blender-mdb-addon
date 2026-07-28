@@ -4,6 +4,7 @@ import bpy
 
 
 IS_BPY_V3 = bpy.app.version < (4, 0, 0)
+IS_BPY_V5 = bpy.app.version >= (5, 0, 0)
 
 # MDB does not store the UV set consumed by a shader texture. Common numbered
 # slots are inferable; genuinely exceptional shaders can be added here without
@@ -71,6 +72,30 @@ def new_socket(node_tree, name, in_out, socket_type):
             in_out=in_out,
             socket_type=socket_type,
         )
+
+
+def new_separate_rgb(node_tree):
+    """Create an RGB channel separator across Blender node API versions.
+
+    Blender 5 removed ``ShaderNodeSeparateRGB`` in favour of the more general
+    ``ShaderNodeSeparateColor``.  The latter must be put in RGB mode and uses
+    descriptive socket names, so callers should use ``separate_rgb_input``
+    and ``separate_rgb_output`` rather than accessing sockets directly.
+    """
+    if IS_BPY_V5:
+        node = node_tree.nodes.new('ShaderNodeSeparateColor')
+        node.mode = 'RGB'
+        return node
+    return node_tree.nodes.new('ShaderNodeSeparateRGB')
+
+
+def separate_rgb_input(node):
+    return node.inputs.get('Image') or node.inputs['Color']
+
+
+def separate_rgb_output(node, channel):
+    legacy_names = {'R': 'Red', 'G': 'Green', 'B': 'Blue'}
+    return node.outputs.get(channel) or node.outputs[legacy_names[channel]]
 
 
 def infer_uv_channel(shader_name, slot_name):
@@ -325,10 +350,13 @@ class Shader:
         if channel == 'A':
             return self.input(texture_name + '_alpha')
         if texture_name not in self.split_map:
-            split = self.shader_tree.nodes.new('ShaderNodeSeparateRGB')
-            self.shader_tree.links.new(split.inputs['Image'], self.input(texture_name))
+            split = new_separate_rgb(self.shader_tree)
+            self.shader_tree.links.new(
+                separate_rgb_input(split),
+                self.input(texture_name),
+            )
             self.split_map[texture_name] = split
-        return self.split_map[texture_name].outputs[channel]
+        return separate_rgb_output(self.split_map[texture_name], channel)
 
     def multiply_color(self, first, second):
         if first is None:

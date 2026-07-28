@@ -28,7 +28,13 @@ from .mdb_parser import (
     parse_vertex_layout,
     parse_vertices,
 )
-from .shader import new_socket, get_shader
+from .shader import (
+    get_shader,
+    new_separate_rgb,
+    new_socket,
+    separate_rgb_input,
+    separate_rgb_output,
+)
 
 MDB_EDITING_NOTES = """MDB material editing
 
@@ -96,17 +102,17 @@ def ensure_normal_unswizzle_group():
     new_socket(node_tree, 'Color', 'INPUT', 'NodeSocketColor')
     new_socket(node_tree, 'Alpha', 'INPUT', 'NodeSocketFloat')
 
-    split_rgb = node_tree.nodes.new('ShaderNodeSeparateRGB')
+    split_rgb = new_separate_rgb(node_tree)
     split_rgb.location[0] = spacing * 1
     node_tree.links.new(
-        split_rgb.inputs['Image'],
+        separate_rgb_input(split_rgb),
         group_inputs.outputs['Color'],
     )
 
     value_r = node_tree.nodes.new('ShaderNodeMath')
     value_r.location[0] = spacing * 2
     value_r.operation = 'MULTIPLY'
-    node_tree.links.new(value_r.inputs[0], split_rgb.outputs['R'])
+    node_tree.links.new(value_r.inputs[0], separate_rgb_output(split_rgb, 'R'))
     node_tree.links.new(value_r.inputs[1], group_inputs.outputs['Alpha'])
 
     multiply_r = node_tree.nodes.new('ShaderNodeMath')
@@ -120,7 +126,7 @@ def ensure_normal_unswizzle_group():
     multiply_g.location[0] = spacing * 3
     multiply_g.location[1] -= 170
     multiply_g.operation = 'MULTIPLY_ADD'
-    node_tree.links.new(multiply_g.inputs[0], split_rgb.outputs['G'])
+    node_tree.links.new(multiply_g.inputs[0], separate_rgb_output(split_rgb, 'G'))
     multiply_g.inputs[1].default_value = 2.0
     multiply_g.inputs[2].default_value = -1.0
 
@@ -168,7 +174,7 @@ def ensure_normal_unswizzle_group():
     flipped_g.location[0] = spacing * 9
     flipped_g.operation = 'SUBTRACT'
     flipped_g.inputs[0].default_value = 1.0
-    node_tree.links.new(flipped_g.inputs[1], split_rgb.outputs['G'])
+    node_tree.links.new(flipped_g.inputs[1], separate_rgb_output(split_rgb, 'G'))
 
     combine_rgb = node_tree.nodes.new('ShaderNodeCombineRGB')
     combine_rgb.location[0] = spacing * 10

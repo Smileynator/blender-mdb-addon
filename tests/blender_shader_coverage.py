@@ -64,6 +64,22 @@ def assert_schema(shader, material):
         assert strength.name == "param_r_m_occ_light_alpha"
 
 
+def assert_rgb_separator_compatibility(import_mdb, get_shader):
+    """Exercise both shader-preview users of the versioned separator helper."""
+    normal_group = import_mdb.ensure_normal_unswizzle_group()
+    assert normal_group is not None
+
+    material = {
+        "shader": "separator_compatibility",
+        "params": [],
+        "textures": [{"map": "param_red_green_blue"}],
+        "render_queue_class": 0,
+    }
+    shader = get_shader(material["shader"], False, material)
+    for component in ("red", "green", "blue"):
+        assert shader.component(component) is not None
+
+
 def main():
     separator = sys.argv.index("--")
     roots = [Path(argument).resolve() for argument in sys.argv[separator + 1:]]
@@ -72,6 +88,8 @@ def main():
 
     from _mdb_shader_coverage import import_mdb
     from _mdb_shader_coverage.shader import get_shader
+
+    assert_rgb_separator_compatibility(import_mdb, get_shader)
 
     files = sorted(
         file
