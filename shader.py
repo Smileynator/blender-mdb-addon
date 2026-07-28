@@ -98,6 +98,24 @@ def separate_rgb_output(node, channel):
     return node.outputs.get(channel) or node.outputs[legacy_names[channel]]
 
 
+def new_combine_rgb(node_tree):
+    """Create an RGB combiner across Blender node API versions."""
+    if IS_BPY_V5:
+        node = node_tree.nodes.new('ShaderNodeCombineColor')
+        node.mode = 'RGB'
+        return node
+    return node_tree.nodes.new('ShaderNodeCombineRGB')
+
+
+def combine_rgb_input(node, channel):
+    modern_names = {'R': 'Red', 'G': 'Green', 'B': 'Blue'}
+    return node.inputs.get(channel) or node.inputs[modern_names[channel]]
+
+
+def combine_rgb_output(node):
+    return node.outputs.get('Image') or node.outputs['Color']
+
+
 def infer_uv_channel(shader_name, slot_name):
     exception = UV_EXCEPTIONS.get((shader_name, slot_name))
     if exception is not None:

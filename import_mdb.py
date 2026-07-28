@@ -29,7 +29,10 @@ from .mdb_parser import (
     parse_vertices,
 )
 from .shader import (
+    combine_rgb_input,
+    combine_rgb_output,
     get_shader,
+    new_combine_rgb,
     new_separate_rgb,
     new_socket,
     separate_rgb_input,
@@ -176,18 +179,18 @@ def ensure_normal_unswizzle_group():
     flipped_g.inputs[0].default_value = 1.0
     node_tree.links.new(flipped_g.inputs[1], separate_rgb_output(split_rgb, 'G'))
 
-    combine_rgb = node_tree.nodes.new('ShaderNodeCombineRGB')
+    combine_rgb = new_combine_rgb(node_tree)
     combine_rgb.location[0] = spacing * 10
-    node_tree.links.new(combine_rgb.inputs['R'], value_r.outputs['Value'])
-    node_tree.links.new(combine_rgb.inputs['G'], flipped_g.outputs['Value'])
-    node_tree.links.new(combine_rgb.inputs['B'], packed_b.outputs['Value'])
+    node_tree.links.new(combine_rgb_input(combine_rgb, 'R'), value_r.outputs['Value'])
+    node_tree.links.new(combine_rgb_input(combine_rgb, 'G'), flipped_g.outputs['Value'])
+    node_tree.links.new(combine_rgb_input(combine_rgb, 'B'), packed_b.outputs['Value'])
 
     group_outputs = node_tree.nodes.new('NodeGroupOutput')
     group_outputs.location[0] = spacing * 11
     new_socket(node_tree, 'Color', 'OUTPUT', 'NodeSocketColor')
     node_tree.links.new(
         group_outputs.inputs['Color'],
-        combine_rgb.outputs['Image'],
+        combine_rgb_output(combine_rgb),
     )
     return node_tree
 
