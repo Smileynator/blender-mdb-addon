@@ -4,6 +4,8 @@
 import bpy
 import mathutils
 
+from .action_compat import initialize_action_fcurves, new_fcurve
+
 from mathutils import Vector
 from struct import unpack
 
@@ -343,7 +345,7 @@ def local_rest_matrix(pose_bone):
 
 
 def create_sampled_fcurves(
-    action,
+    curves,
     pose_bone,
     property_name,
     component_count,
@@ -352,7 +354,8 @@ def create_sampled_fcurves(
     """Create a complete transform channel without live pose evaluation."""
     data_path = f'pose.bones["{pose_bone.name}"].{property_name}'
     for component_index in range(component_count):
-        curve = action.fcurves.new(
+        curve = new_fcurve(
+            curves,
             data_path,
             index=component_index,
             action_group=pose_bone.name,
@@ -380,6 +383,7 @@ def create_action_with_animation(
     action['loop'] = animation['loop']
     action['duration'] = animation['duration']
     action['keyframes'] = animation['keyframes']
+    curves = initialize_action_fcurves(action, armature_obj)
     keyframes = animation["keyframes"]
     bone_data_by_id = {
         bone_data['bone_id']: bone_data
@@ -416,7 +420,7 @@ def create_action_with_animation(
                 scale_samples.append((frame, tuple(scale)))
         if position_samples:
             create_sampled_fcurves(
-                action,
+                curves,
                 pose_bone,
                 'location',
                 3,
@@ -424,7 +428,7 @@ def create_action_with_animation(
             )
         if rotation_samples:
             create_sampled_fcurves(
-                action,
+                curves,
                 pose_bone,
                 'rotation_quaternion',
                 4,
@@ -432,7 +436,7 @@ def create_action_with_animation(
             )
         if scale_samples:
             create_sampled_fcurves(
-                action,
+                curves,
                 pose_bone,
                 'scale',
                 3,
@@ -446,7 +450,10 @@ def create_action_with_animation(
 
 def load(operator, context, filepath='', **kwargs):
     global override_version
-    override_version = operator.option_override_version
+    if bpy.app.version >= (5, 2, 0):
+        override_version = getattr(operator, 'option_override_version', 0)
+    else:
+        override_version = operator.option_override_version
     # Parse CANM file
     with open(filepath, 'rb') as f:
         canm = parse_canm(f)

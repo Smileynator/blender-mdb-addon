@@ -4,6 +4,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import bpy
+
 
 def load_addon(addon_root):
     package_name = "_mdb_shader_coverage"
@@ -58,7 +60,12 @@ def assert_schema(shader, material):
         "light_color",
         "param_r_m_occ_light",
     } <= available:
-        assert bsdf.inputs["Emission"].is_linked
+        emission_input = (
+            "Emission"
+            if bpy.app.version < (4, 0, 0)
+            else "Emission Color"
+        )
+        assert bsdf.inputs[emission_input].is_linked
         assert bsdf.inputs["Emission Strength"].is_linked
         strength = bsdf.inputs["Emission Strength"].links[0].from_socket
         assert strength.name == "param_r_m_occ_light_alpha"

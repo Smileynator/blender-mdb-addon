@@ -72,27 +72,26 @@ def main():
     ) == {"FINISHED"}
     imported = time.perf_counter()
 
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        output_path = requested_output or (
-            Path(temporary_directory) / canm_path.name
-        )
-        assert export_canm.save(
-            operator,
-            bpy.context,
-            filepath=str(output_path),
-            version=export_version(canm_path),
-        ) == {"FINISHED"}
-        exported = time.perf_counter()
-        source_count = channel_count(canm_path)
-        output_count = channel_count(output_path)
-        print(
-            "CANM round-trip benchmark: "
-            f"source_channels={source_count}, "
-            f"exported_channels={output_count}, "
-            f"drift={output_count - source_count:+d}, "
-            f"import_seconds={imported - started:.3f}, "
-            f"export_seconds={exported - imported:.3f}"
-        )
+    output_path = requested_output or (
+        Path(tempfile.gettempdir()) / f"mdb_roundtrip_{canm_path.name}"
+    )
+    assert export_canm.save(
+        operator,
+        bpy.context,
+        filepath=str(output_path),
+        version=export_version(canm_path),
+    ) == {"FINISHED"}
+    exported = time.perf_counter()
+    source_count = channel_count(canm_path)
+    output_count = channel_count(output_path)
+    print(
+        "CANM round-trip benchmark: "
+        f"source_channels={source_count}, "
+        f"exported_channels={output_count}, "
+        f"drift={output_count - source_count:+d}, "
+        f"import_seconds={imported - started:.3f}, "
+        f"export_seconds={exported - imported:.3f}"
+    )
 
 
 if __name__ == "__main__":

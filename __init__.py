@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Earth Defense Force Formats",
     "author": "Smileynator / BlueAmulet / Ktaro",
-    "version": (1, 9, 1),
+    "version": (1, 9, 2),
     "blender": (3, 6, 0),
     "location": "File > Import-Export",
     "description": "Import-Export MDB, CANM, mesh, UV's, materials, textures, Animations from Earth Defense Force",
@@ -67,8 +67,14 @@ class ImportMDB(bpy.types.Operator, ImportHelper):
 
     def draw(self, context):
         layout = self.layout
-        layout.prop(self, "option_override_version")
-        layout.prop(self, "option_ignore_errors")
+        if bpy.app.version >= (5, 2, 0):
+            if hasattr(self, "option_override_version"):
+                layout.prop(self, "option_override_version")
+            if hasattr(self, "option_ignore_errors"):
+                layout.prop(self, "option_ignore_errors")
+        else:
+            layout.prop(self, "option_override_version")
+            layout.prop(self, "option_ignore_errors")
 
     def invoke(self, context, event):
         context.window_manager.fileselect_add(self)
@@ -158,8 +164,14 @@ class ImportCANM(bpy.types.Operator, ImportHelper):
 
     def draw(self, context):
         layout = self.layout
-        layout.prop(self, "option_override_version")
-        layout.prop(self, "option_ignore_errors")
+        if bpy.app.version >= (5, 2, 0):
+            if hasattr(self, "option_override_version"):
+                layout.prop(self, "option_override_version")
+            if hasattr(self, "option_ignore_errors"):
+                layout.prop(self, "option_ignore_errors")
+        else:
+            layout.prop(self, "option_override_version")
+            layout.prop(self, "option_ignore_errors")
     
     def invoke(self, context, event):
         context.window_manager.fileselect_add(self)

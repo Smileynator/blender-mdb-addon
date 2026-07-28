@@ -58,6 +58,16 @@ bone_up_Y = mathutils.Matrix(((1.0, 0.0, 0.0, 0.0),
                             (0.0, 0.0, 0.0, 1.0)))
 
 
+# Blender 5.2 keeps node-group interfaces more strictly than earlier versions.
+# Give its normal-preview graph a distinct datablock so an incomplete graph
+# left behind by an earlier failed import cannot be reused.
+NORMAL_UNSWIZZLE_GROUP_NAME = (
+    'Normal Unswizzle (Blender 5)'
+    if bpy.app.version >= (5, 2, 0)
+    else 'Normal Unswizzle'
+)
+
+
 @dataclass(frozen=True)
 class ImportSettings:
     ignore_errors: bool = False
@@ -91,13 +101,13 @@ def add_material_editing_note(node_tree, shader_node):
 
 
 def ensure_normal_unswizzle_group():
-    existing = bpy.data.node_groups.get('Normal Unswizzle')
+    existing = bpy.data.node_groups.get(NORMAL_UNSWIZZLE_GROUP_NAME)
     if existing is not None:
         return existing
 
     spacing = 160
     node_tree = bpy.data.node_groups.new(
-        'Normal Unswizzle',
+        NORMAL_UNSWIZZLE_GROUP_NAME,
         'ShaderNodeTree',
     )
     group_inputs = node_tree.nodes.new('NodeGroupInput')
@@ -279,7 +289,7 @@ def connect_texture_preview(
         unswizzle_node = node_tree.nodes.new('ShaderNodeGroup')
         unswizzle_node.location[0] = shader_node.location[0] - 350
         unswizzle_node.node_tree = bpy.data.node_groups.get(
-            'Normal Unswizzle',
+            NORMAL_UNSWIZZLE_GROUP_NAME,
         )
         unswizzle_node.show_options = False
         node_tree.links.new(
@@ -293,10 +303,11 @@ def connect_texture_preview(
 
         normal_map = node_tree.nodes.new('ShaderNodeNormalMap')
         normal_map.location[0] = shader_node.location[0] - 200
-        node_tree.links.new(
-            normal_map.inputs['Color'],
-            unswizzle_node.outputs['Color'],
-        )
+        # Blender 5.2's Normal Map node retains the Color socket; the
+        # versioned group name above handles its stricter group-interface
+        # lifecycle without relying on alternate socket-name fallbacks.
+        normal_map_input = normal_map.inputs['Color']
+        node_tree.links.new(normal_map_input, unswizzle_node.outputs['Color'])
         node_tree.links.new(color_socket, normal_map.outputs['Normal'])
     else:
         node_tree.links.new(color_socket, texture_node.outputs['Color'])
@@ -638,9 +649,17 @@ def find_triangle_strip_meshes(mdb):
 # Main function
 def load(operator, context, filepath='', **kwargs):
     del kwargs
+    # Blender 5.2 can invoke file-import operators without materializing
+    # optional RNA properties.  Preserve their normal defaults in that case.
+    if bpy.app.version >= (5, 2, 0):
+        ignore_errors = getattr(operator, 'option_ignore_errors', False)
+        override_version = getattr(operator, 'option_override_version', 0)
+    else:
+        ignore_errors = operator.option_ignore_errors
+        override_version = operator.option_override_version
     settings = ImportSettings(
-        ignore_errors=operator.option_ignore_errors,
-        override_version=operator.option_override_version,
+        ignore_errors=ignore_errors,
+        override_version=override_version,
     )
     try:
         with open(filepath, 'rb') as stream:

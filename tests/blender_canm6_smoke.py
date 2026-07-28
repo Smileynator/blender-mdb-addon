@@ -116,7 +116,10 @@ def assert_scale_action_round_trip(export_canm, import_canm):
         assert max(abs(actual[i] - expected[i]) for i in range(3)) < 1e-5
 
 
-def assert_direct_curve_construction_matches_pose_insertion(import_canm):
+def assert_direct_curve_construction_matches_pose_insertion(
+    import_canm,
+    action_compat,
+):
     armature = bpy.data.armatures.new("CANM direct curve test")
     armature_obj = bpy.data.objects.new("CANM direct curve test", armature)
     bpy.context.collection.objects.link(armature_obj)
@@ -236,10 +239,11 @@ def assert_direct_curve_construction_matches_pose_insertion(import_canm):
         list(enumerate(pose_bones)),
     )
     action = armature_obj.animation_data.nla_tracks[-1].strips[0].action
+    curves = action_compat.action_fcurves(action)
     for pose_bone in pose_bones:
         paths = {
             property_name: [
-                action.fcurves.find(
+                curves.find(
                     f'pose.bones["{pose_bone.name}"].{property_name}',
                     index=index,
                 )
@@ -272,7 +276,7 @@ def assert_direct_curve_construction_matches_pose_insertion(import_canm):
             assert (actual_scale - expected_scale).length < 1e-5
 
 
-def assert_curve_validation(export_canm):
+def assert_curve_validation(export_canm, action_compat):
     armature_obj = bpy.data.objects["CANM scale test"]
     pose_bone = armature_obj.pose.bones["scale_bone"]
 
@@ -280,7 +284,12 @@ def assert_curve_validation(export_canm):
     partial_action["duration"] = 4.0
     partial_action["loop"] = False
     partial_action["keyframes"] = 2
-    partial_action.fcurves.new(
+    partial_curves = action_compat.initialize_action_fcurves(
+        partial_action,
+        armature_obj,
+    )
+    action_compat.new_fcurve(
+        partial_curves,
         'pose.bones["scale_bone"].location',
         index=0,
     ).keyframe_points.insert(1.0, 0.0)
@@ -296,9 +305,14 @@ def assert_curve_validation(export_canm):
         raise AssertionError("Partial XYZ curves were silently accepted")
 
     complete_action = bpy.data.actions.new("yz_animated_scale")
+    complete_curves = action_compat.initialize_action_fcurves(
+        complete_action,
+        armature_obj,
+    )
     scale_curves = []
     for index in range(3):
-        curve = complete_action.fcurves.new(
+        curve = action_compat.new_fcurve(
+            complete_curves,
             'pose.bones["scale_bone"].scale',
             index=index,
         )
@@ -311,16 +325,17 @@ def assert_curve_validation(export_canm):
     track.name = partial_action.name
     track.strips.new(partial_action.name, 1, partial_action)
     operator = Operator()
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        output_path = Path(temporary_directory) / "invalid.CANM"
-        result = export_canm.save(
-            operator,
-            bpy.context,
-            filepath=str(output_path),
-            version=5,
-        )
-        assert result == {"CANCELLED"}
-        assert not output_path.exists()
+    output_path = Path(tempfile.gettempdir()) / "mdb_invalid_canm_test.CANM"
+    if output_path.exists():
+        output_path.unlink()
+    result = export_canm.save(
+        operator,
+        bpy.context,
+        filepath=str(output_path),
+        version=5,
+    )
+    assert result == {"CANCELLED"}
+    assert not output_path.exists()
     assert any(
         "missing component curve(s) Y, Z" in message
         for _, message in operator.messages
@@ -406,7 +421,7 @@ def main():
     addon_root = Path(__file__).resolve().parents[1]
     load_addon(addon_root)
 
-    from _canm6_smoke import export_canm, import_canm
+    from _canm6_smoke import action_compat, export_canm, import_canm
 
     assert export_canm.calculate_frame_interval(12.0, 1) == 12.0
     assert export_canm.calculate_frame_interval(12.0, 4) == 4.0
@@ -474,9 +489,12 @@ def main():
     assert sampled_scale["matrix"] == \
         mathutils.Matrix.Diagonal((2.0, 4.0, 6.0, 1.0))
     assert_scale_action_round_trip(export_canm, import_canm)
-    assert_curve_validation(export_canm)
+    assert_curve_validation(export_canm, action_compat)
     assert_channel_deduplication(export_canm)
-    assert_direct_curve_construction_matches_pose_insertion(import_canm)
+    assert_direct_curve_construction_matches_pose_insertion(
+        import_canm,
+        action_compat,
+    )
 
     static_position = export_canm.vector_to_channel(
         [mathutils.Vector((1.0, 2.0, 3.0))],

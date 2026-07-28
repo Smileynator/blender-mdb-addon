@@ -9,6 +9,8 @@ import mathutils
 
 from struct import pack, unpack
 
+from .action_compat import action_fcurves
+
 
 # Approximate sharing is permitted only when every decoded sample remains
 # within these role-specific bounds of the stored representative.
@@ -23,7 +25,7 @@ def get_bone_names(missing_bones):
     for track in bpy.context.object.animation_data.nla_tracks:
         for strip in track.strips:
             if strip.action:
-                for fcurve in strip.action.fcurves:
+                for fcurve in action_fcurves(strip.action):
                     if "pose.bones" in fcurve.data_path:
                         bone_name = fcurve.data_path.split('"')[1]
                         bone_names.add(bone_name)
@@ -48,8 +50,9 @@ def get_complete_transform_curves(
     component_names,
 ):
     data_path = f'pose.bones["{bone_name}"].{property_name}'
+    fcurves = action_fcurves(action)
     curves = [
-        action.fcurves.find(data_path, index=index)
+        fcurves.find(data_path, index=index)
         for index in range(len(component_names))
     ]
     present = [curve is not None for curve in curves]
@@ -123,7 +126,7 @@ def get_bone_data(action, bone_names, pose_bones):
         ):
             data_path = f'pose.bones["{bone_name}"].{property_name}'
             if any(
-                action.fcurves.find(data_path, index=index)
+                action_fcurves(action).find(data_path, index=index)
                 for index in range(component_count)
             ):
                 raise ValueError(
