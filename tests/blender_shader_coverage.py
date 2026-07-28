@@ -54,6 +54,14 @@ def assert_schema(shader, material):
         assert bsdf.inputs["Base Color"].is_linked
     if {"normal", "damage_normal"} & available:
         assert bsdf.inputs["Normal"].is_linked
+    if {
+        "light_color",
+        "param_r_m_occ_light",
+    } <= available:
+        assert bsdf.inputs["Emission"].is_linked
+        assert bsdf.inputs["Emission Strength"].is_linked
+        strength = bsdf.inputs["Emission Strength"].links[0].from_socket
+        assert strength.name == "param_r_m_occ_light_alpha"
 
 
 def main():

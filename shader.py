@@ -192,10 +192,15 @@ class Shader:
             self.shader_tree.links.new(bsdf.inputs['Alpha'], alpha)
             self.has_alpha = True
 
-        emission = self.build_emission()
+        emission, emission_strength = self.build_emission()
         if emission is not None:
             emission_input = 'Emission' if IS_BPY_V3 else 'Emission Color'
             self.shader_tree.links.new(bsdf.inputs[emission_input], emission)
+        if emission_strength is not None:
+            self.shader_tree.links.new(
+                bsdf.inputs['Emission Strength'],
+                emission_strength,
+            )
 
         specular = self.component('reflect') or self.component('specint')
         if specular is not None:
@@ -224,6 +229,13 @@ class Shader:
         if damage_color is not None and damage_mask is not None:
             color = self.mix_color(color, damage_color, damage_mask)
 
+        # Packed EDF6 maps conventionally reserve B ("occ") for material
+        # occlusion.  It darkens the diffuse preview only; it is neither
+        # transparency nor part of the emissive mask.
+        occlusion = self.component('occ')
+        if color is not None and occlusion is not None:
+            color = self.multiply_color(color, occlusion)
+
         return color
 
     def build_alpha(self):
@@ -249,11 +261,16 @@ class Shader:
 
     def build_emission(self):
         light_color = self.input('light_color')
-        light_mask = self.component('lightmask')
+        # EDF6 character materials pack roughness, metallic, occlusion, and
+        # the emissive mask into param_r_m_occ_light.  Its alpha is a mask for
+        # light_color, not opacity for the material itself.
+        light_mask = self.component('light') or self.component('lightmask')
         if light_color is not None:
-            emission = self.multiply_color(light_color, light_mask)
+            emission = light_color
+            emission_strength = light_mask
         else:
             emission = None
+            emission_strength = None
 
         for index in range(4):
             color = self.input(f'light{index}_color')
@@ -262,14 +279,28 @@ class Shader:
                 or self.input(f'light{index}_tex')
             )
             contribution = self.multiply_color(color, texture)
+            # These legacy scrolling-light contributions encode their mask in
+            # the colour texture.  Keep them in the colour path so they are
+            # not incorrectly gated by the character light mask.
+            if emission_strength is not None and contribution is not None:
+                emission = self.add_color(
+                    self.multiply_color(emission, emission_strength),
+                    contribution,
+                )
+                emission_strength = None
+                continue
             emission = self.add_color(emission, contribution)
 
         if emission is not None and self.has_inputs(
             'light_fall_off_scale',
             'light_fall_off_offset',
         ):
-            emission = self.multiply_color(emission, self.gen_edge_chain('light_'))
-        return emission
+            falloff = self.gen_edge_chain('light_')
+            if emission_strength is not None:
+                emission_strength = self.multiply_value(emission_strength, falloff)
+            else:
+                emission = self.multiply_color(emission, falloff)
+        return emission, emission_strength
 
     def map_packed_textures(self):
         for texture in self.material['textures']:
