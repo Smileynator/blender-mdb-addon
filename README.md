@@ -36,7 +36,7 @@ Very little error catching has been implemented, so expect some problems.
 - Mesh editing support
 - Weight painting support
 - UV Mapping support
-- Animation Support
+- Animation Support & Additive Animation Support
 
 ## Usage Notes
 ![image](https://github.com/Smileynator/blender-mdb-addon/assets/3433068/376663dc-c9ad-4190-a082-b8511b399f11)
@@ -45,7 +45,7 @@ Very little error catching has been implemented, so expect some problems.
 - Import .mdb under "File->Import->Earth Defense Force Model (.mdb)"
 - Export .mdb under "File->Export->Earth Defense Force Model (.mdb)"
 - Import .canm under "File->Import->Earth Defense Force Animation (.canm)"
-- Export .canm under the separate EDF5 and EDF6 animation entries in "File->Export"
+- Export .canm under "File->Export->Earth Defense Force Animation (.canm)"
 
 # MDB Notes
 MDB export requires every face to be triangulated. Export is canceled before writing if any quad or n-gon remains.
@@ -72,14 +72,12 @@ vertices after seam splitting is rejected with an error.
 
 Bone bounding boxes are always recomputed from the geometry being exported. Weighted vertices supply deform-bone bounds; matching same-named objects supply bounds for the unskinned bone groups observed to use rigid geometry. This is mandatory because preserved import-time bounds become invalid after geometry or rig edits.
 
-Shader details might be incomplete, but most of the visual aspects should be there.
+Shader visuals in the Blender Editor do not reflect the in-game assets. No worries though, the game-visuals are preserved, and you can tweak default settings regardless!
 
-Models make use of some extra data we either cannot support in Blender or do not know what they exactly do. For the time being those are stored as Custom Properties on the Bones and Materials.
+Models make use of some extra data we cannot support in Blender. Those are stored as Custom Properties on the Bones, Animation strips and Materials to be used for export later.
 
-Scenes imported with add-on versions before the MDB metadata cleanup must be
-re-imported from their source MDB before export. Older imports did not preserve
-enough information for a reliable round trip, so the exporter deliberately
-cancels instead of guessing missing values.
+Scenes imported with an older add-on version, should always start with a new fresh import. Keeping versions of the add-on backwards compatible was nearly impossible, and as of writing for 1.9.0 we largely expect the formatting to be stable and lossless. Older imports did not preserve
+enough information for a reliable round trip, so the exporter deliberately cancels instead of guessing missing values.
 
 ## Editing MDB materials
 
@@ -96,9 +94,7 @@ For lossless round trips:
 - Connecting a Blender Value or RGB node to a numeric parameter does not export the evaluated connection. Edit the shader-group input's own value instead.
 - Parameters and defaults that exist only in the shader preview lookup are never added to the exported MDB.
 - Parameter order, declared type and component count, unused float slots, shader name, texture-table identity, and sampler overrides are retained separately when Blender has no native socket representation for them.
-- Unknown shaders can still be imported and exported. They receive a generic editable preview containing the parameters and texture-slot names found in the MDB.
-
-Each imported material includes an `MDB Editing Notes` frame in the Shader Editor containing a short version of these rules.
+- Unknown shaders can still be imported and exported. They receive a generic editable preview containing the parameters and texture-slot names found in the MDB. Those might make bad assumptions or look aweful, but it does not affect the ingame look.
 
 Shader previews are built from the capabilities present in each MDB material. 
 Recognized parameter and slot names drive base colour, normals, transparency, packed texture channels, colour masks, damage overlays, emission, and facing-angle falloff. 
@@ -106,45 +102,34 @@ New shader names therefore receive the same treatment automatically when they us
 
 MDB does not store which UV set a shader samples. Numbered texture-slot names are handled automatically, while a small exception list preserves known UV selections for shaders whose slot names do not carry enough information. The retired shader table remains in the source tree only as a test oracle and is not imported by production code.
 
-Model animations and hitboxes are not stored in the model file, these have to be edited externally.
+## Good things to know
+Character hitboxes are not stored in the model nor animation file, these have to be edited externally (Havoc)
 
-The game internally heavily relies on specific naming structures we have not defined yet. So renaming or removing of Bones, Materials and Objects is highly discouraged. Doing this anyway might result in incorrect dismemberment mechanics, crashes during gameplay, broken animations, missing hitboxes, etc.
-
-Try keeping editing of the materials to a minimal, mostly they are for setting up textures as well as default variables the game uses, the rest is purely there to ensure blender renders it somewhat properly as a preview.
+The game internally heavily relies on specific naming structures and layouts. Renaming or removing Bones, Materials and Entire Meshes is highly discouraged. Doing this will most likely result in incorrect functionality in game to some degree, or even cause crashing of the game.
 
 Custom Properties you should know about:
 - Bones preserve `participation_metadata`, signed `semantic_role`, and
   `normalized_bone_flag` custom properties. The exact authoring meaning of the
   first and runtime consumer of the last remain unconfirmed.
 - Bone `bounds_half_size` and `bounds_center` custom properties contain the two
-  bounding float4s. Export recomputes them from the edited geometry.
-- Materials retain MDB identity and material-table metadata in addition to the following render properties.
-  - `draw_priority` is literal ordering within render-queue class 2. A higher
-    value is submitted later.
-  - `render_queue_class` is normally 0, while class 2 is used by transparent
-    and UI elements.
-  - `render_participation_flags` is normally 3. Bit 0 enables shadow casting;
-    value 2 is observed on transparent UI and barrier materials.
+  bounding float4s. Export recomputes them from the edited geometry, they are just there in case you wanted to see them.
+- Materials retain MDB identity and material-table metadata as well as some extra properties regarding rendering priority.
  
 # CANM Notes
-CANM import detects EDF5 (`512`) and EDF6 (`768`) automatically. Export provides separate EDF5 and EDF6 entries. EDF6 rotation channels use absolute quaternions and their keyframe block is written with 16-byte alignment.
+CANM import detects EDF5 (`512`) and EDF6 (`768`) automatically. Export provides separate EDF5 and EDF6 entries.
 
 Animations can only be imported for the skeleton they are means to go with. So match the CANM file with the MDB file it belongs with, and import the MDB first.
 
-To get a CANM file, you need to extract them, and later re-add them to a CAS file. Use my packing tool for this: https://github.com/Smileynator/CAS-Processor
+To get a CANM file, you need to extract them, and later re-add them to a CAS file. Use my packing tool for this: 
+https://github.com/Smileynator/CAS-Processor
+Note that removing or adding whole animation clips away from the defaults, causes issues with the CAS format as it expects certain clips at certain indexes. It is not advised to do this for the time being.
 
-Animations only support Quaternion rotations, any other rotations will be ignored during export.
+Animations only support Blender Quaternion rotations, any other rotations will be ignored during export.
 
-Animations have Scale support in theory, but the game rarely uses it, so it is largely untested.
-
-Animations during export are optimized to minimize filesize and prevent channel overflow. To not run into the channel limitation, any bone that does not need pos/rot/scale, should delete those curves entirely. If you only need a starting value, stick to 1 keyframe at frame 1. This allows them to be optimized further. Values are rounded to the closest 2e-06, though this should not be practically visible to anyone.
+Animations during export are optimized to minimize filesize and prevent channel overflow. To not run into the channel limitation, any bone that does not need pos/rot/scale, should delete those curves entirely. If you only need a starting value, stick to 1 keyframe at frame 1. This allows them to be optimized further. Beyond that we try to merge curves where possible. The maximum limit is 65k curves over all animations.
 
 The export will sample a Fcurve per increment of 1, until it reached the amount of keyframes the animation is supposed to have.
 Importing creates 1 keyframe per frame. however this is not required for export, so you can safely delete a few frames to make animation easier.
-
-Keep in mind that animations are being interpolated between by the game's CAS file. This means that unless CAS files are properly edited, removing entire animations or adding completely new animations instead of replacing existing ones, will likely cause problems.
-
-If after modding the new CAS into the game, the character T-poses, something went wrong and needs to be looked into.
 
 Custom Properties you should know about:
 - The Armature object houses "missing bones" which is a list of bones that are in the CANM file but not present in the MDB. Scene Root is always there. These must be preserved for export to work.
@@ -155,12 +140,12 @@ Custom Properties you should know about:
 
 ### Editing additive animations
 
-CANM does not store an additive flag. CAS decides whether a CANM clip is
-composed on top of another pose. Imported additive clips therefore round-trip
-correctly but usually look distorted when Blender displays them as ordinary
-standalone actions.
+CAS decides whether a CANM clip is composed on top of another pose. Imported additive clips therefore round-trip
+correctly but usually look distorted when Blender displays them as ordinary standalone actions. (usually curls the model into a messy ball)
 
-Select the armature and open **3D Viewport > Sidebar > Animation > EDF Additive
+To start Additive animation editing select the armature and go into Pose mode.
+
+Open **3D Viewport > Sidebar > Animation > EDF Additive
 Animation**:
 
 1. Choose **Start Additive Editing**.
@@ -168,25 +153,24 @@ Animation**:
 3. Choose **Animated Action** to sample the base in CANM engine time, or
    **Fixed Frame** to hold one base sample for the whole edit.
 4. Edit the generated `[Additive Edit]` Action as an ordinary pose animation.
-5. Choose **Save Additive Editing** to convert the edited pose back into the
+5. Choose **Save Additive Editing** to convert the edited curves back into the
    original additive Action. **Cancel Additive Editing** discards the preview.
 
 The source Action and all NLA tracks are left untouched until Save is chosen.
-Their previous mute state is restored afterwards. Only translation and
+Their previous mute state is restored afterward. Only translation and
 quaternion-rotation channels already present in the source additive Action are
 written back; this prevents an accidental pose or keyframe from introducing
-new CANM bone channels. Save stops with a clear error if the preview changed a
+new CANM bone channels (Auto keying is a sin). Save stops with a clear error if the preview changed a
 base-only, new, or scale channel, rather than silently discarding that edit.
 Undo that channel edit or cancel the session. Additive scale curves are
 preserved unchanged because CAS tag `0x08` takes scale from the base pose
-rather than the additive operand.
+rather than the additive operand, it is simply unsupported in additive animation.
 
 Do not rename or delete the source, base, or preview Action during an editing
 session, or edit the source/base Action through another editor. Save detects
 those changes and stops rather than combining incompatible data. Complete or
 cancel the session before exporting. The exporter rejects temporary additive
 previews if one has manually been placed in an NLA track.
-
 
 ## Extra Tools, Docs, and Links
 Other Tools: https://github.com/KCreator/Earth-Defence-Force-Documentation/wiki/Tools
