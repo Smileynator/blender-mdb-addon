@@ -116,6 +116,42 @@ def combine_rgb_output(node):
     return node.outputs.get('Image') or node.outputs['Color']
 
 
+def new_color_mix(node_tree):
+    """Create a colour mix node across Blender node API versions."""
+    if IS_BPY_V5:
+        node = node_tree.nodes.new('ShaderNodeMix')
+        node.data_type = 'RGBA'
+        return node
+    return node_tree.nodes.new('ShaderNodeMixRGB')
+
+
+def socket_by_identifier(sockets, identifier):
+    return next(socket for socket in sockets if socket.identifier == identifier)
+
+
+def color_mix_factor_input(node):
+    return node.inputs.get('Fac') or socket_by_identifier(
+        node.inputs,
+        'Factor_Float',
+    )
+
+
+def color_mix_color_input(node, index):
+    legacy_names = {1: 'Color1', 2: 'Color2'}
+    modern_names = {1: 'A_Color', 2: 'B_Color'}
+    return node.inputs.get(legacy_names[index]) or socket_by_identifier(
+        node.inputs,
+        modern_names[index],
+    )
+
+
+def color_mix_output(node):
+    return node.outputs.get('Color') or socket_by_identifier(
+        node.outputs,
+        'Result_Color',
+    )
+
+
 def infer_uv_channel(shader_name, slot_name):
     exception = UV_EXCEPTIONS.get((shader_name, slot_name))
     if exception is not None:
@@ -381,33 +417,33 @@ class Shader:
             return second
         if second is None:
             return first
-        node = self.shader_tree.nodes.new('ShaderNodeMixRGB')
+        node = new_color_mix(self.shader_tree)
         node.blend_type = 'MULTIPLY'
-        node.inputs['Fac'].default_value = 1.0
-        self.shader_tree.links.new(node.inputs['Color1'], first)
-        self.shader_tree.links.new(node.inputs['Color2'], second)
-        return node.outputs['Color']
+        color_mix_factor_input(node).default_value = 1.0
+        self.shader_tree.links.new(color_mix_color_input(node, 1), first)
+        self.shader_tree.links.new(color_mix_color_input(node, 2), second)
+        return color_mix_output(node)
 
     def add_color(self, first, second):
         if first is None:
             return second
         if second is None:
             return first
-        node = self.shader_tree.nodes.new('ShaderNodeMixRGB')
+        node = new_color_mix(self.shader_tree)
         node.blend_type = 'ADD'
-        node.inputs['Fac'].default_value = 1.0
-        self.shader_tree.links.new(node.inputs['Color1'], first)
-        self.shader_tree.links.new(node.inputs['Color2'], second)
-        return node.outputs['Color']
+        color_mix_factor_input(node).default_value = 1.0
+        self.shader_tree.links.new(color_mix_color_input(node, 1), first)
+        self.shader_tree.links.new(color_mix_color_input(node, 2), second)
+        return color_mix_output(node)
 
     def mix_color(self, first, second, factor):
-        node = self.shader_tree.nodes.new('ShaderNodeMixRGB')
-        node.inputs['Color1'].default_value = (1.0, 1.0, 1.0, 1.0)
+        node = new_color_mix(self.shader_tree)
+        color_mix_color_input(node, 1).default_value = (1.0, 1.0, 1.0, 1.0)
         if first is not None:
-            self.shader_tree.links.new(node.inputs['Color1'], first)
-        self.shader_tree.links.new(node.inputs['Color2'], second)
-        self.shader_tree.links.new(node.inputs['Fac'], factor)
-        return node.outputs['Color']
+            self.shader_tree.links.new(color_mix_color_input(node, 1), first)
+        self.shader_tree.links.new(color_mix_color_input(node, 2), second)
+        self.shader_tree.links.new(color_mix_factor_input(node), factor)
+        return color_mix_output(node)
 
     def multiply_value(self, first, second):
         if first is None:

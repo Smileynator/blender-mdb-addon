@@ -80,6 +80,34 @@ def assert_rgb_separator_compatibility(import_mdb, get_shader):
         assert shader.component(component) is not None
 
 
+def assert_blender_5_node_compatibility(shader_module):
+    """Exercise the Blender 5 node choices with Blender 3.6's modern nodes."""
+    old_value = shader_module.IS_BPY_V5
+    shader_module.IS_BPY_V5 = True
+    try:
+        material = {
+            "shader": "blender_5_node_compatibility",
+            "params": [],
+            "textures": [
+                {"map": "diffuse"},
+                {"map": "albedo"},
+                {"map": "param_red_green_blue"},
+            ],
+            "render_queue_class": 0,
+        }
+        shader = shader_module.Shader(material["shader"], material)
+        assert shader.component("red") is not None
+        assert any(node.bl_idname == "ShaderNodeMix" for node in shader.shader_tree.nodes)
+
+        tree = shader.shader_tree
+        combined = shader_module.new_combine_rgb(tree)
+        for channel in "RGB":
+            assert shader_module.combine_rgb_input(combined, channel) is not None
+        assert shader_module.combine_rgb_output(combined) is not None
+    finally:
+        shader_module.IS_BPY_V5 = old_value
+
+
 def main():
     separator = sys.argv.index("--")
     roots = [Path(argument).resolve() for argument in sys.argv[separator + 1:]]
@@ -87,9 +115,11 @@ def main():
     load_addon(addon_root)
 
     from _mdb_shader_coverage import import_mdb
+    from _mdb_shader_coverage import shader as shader_module
     from _mdb_shader_coverage.shader import get_shader
 
     assert_rgb_separator_compatibility(import_mdb, get_shader)
+    assert_blender_5_node_compatibility(shader_module)
 
     files = sorted(
         file
