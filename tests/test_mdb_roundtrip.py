@@ -285,6 +285,31 @@ class MdbRoundTripTests(unittest.TestCase):
         self.assertEqual(exported["type"], 0)
         self.assertEqual(exported["size"], 1)
 
+    def test_texture_node_image_filename_overrides_imported_filename(self):
+        class ImageNode(dict):
+            image = types.SimpleNamespace(
+                filepath_raw="//textures\\replacement_albedo.dds",
+                filepath="",
+            )
+
+        node = ImageNode(mdb_texture_filename="original_albedo.dds")
+
+        self.assertEqual(
+            EXPORT_MDB.get_export_texture_filename(node),
+            "replacement_albedo.dds",
+        )
+
+    def test_texture_node_without_image_preserves_imported_filename(self):
+        class ImageNode(dict):
+            image = None
+
+        node = ImageNode(mdb_texture_filename="original_albedo.dds")
+
+        self.assertEqual(
+            EXPORT_MDB.get_export_texture_filename(node),
+            "original_albedo.dds",
+        )
+
     def test_rgba_uses_the_separate_editable_alpha_socket(self):
         parameter = {
             "name": "diffuse",

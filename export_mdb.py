@@ -312,7 +312,7 @@ def get_textures(source_id):
                 textures[index] = {
                     'index': index,
                     'name': node['mdb_texture_name'],
-                    'filename': node['mdb_texture_filename'],
+                    'filename': get_export_texture_filename(node),
                 }
     return textures
 
@@ -398,6 +398,25 @@ def get_preserved_parameter(all_inputs, parameter):
         'type': parameter['type'],
         'size': size,
     }
+
+
+def get_export_texture_filename(image_node):
+    # The image selected in Blender's Image Texture node is the natural
+    # authoring source. Its disk filename therefore overrides the imported
+    # MDB table entry; the remaining properties preserve EDF-only metadata.
+    texture_filename = image_node['mdb_texture_filename']
+    image = getattr(image_node, 'image', None)
+    if image is not None:
+        image_path = getattr(image, 'filepath_raw', '') or getattr(
+            image,
+            'filepath',
+            '',
+        )
+        if image_path:
+            # Blender paths can use either separator, regardless of the host
+            # which created the .blend file.
+            texture_filename = image_path.replace('\\', '/').rsplit('/', 1)[-1]
+    return texture_filename
 
 
 def get_preserved_texture(image_node):

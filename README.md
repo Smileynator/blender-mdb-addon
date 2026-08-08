@@ -103,6 +103,24 @@ New shader names therefore receive the same treatment automatically when they us
 
 MDB does not store which UV set a shader samples. Numbered texture-slot names are handled automatically, while a small exception list preserves known UV selections for shaders whose slot names do not carry enough information. The retired shader table remains in the source tree only as a test oracle and is not imported by production code.
 
+## Replacing meshes and textures
+
+Use an imported EDF material (or a duplicate of one) on a replacement mesh;
+do not replace it with a new ordinary Blender material. This preserves the
+shader name, texture bindings, sampler settings, render flags, and other
+MDB-only data. The replacement mesh must have exactly one material slot and
+must be triangulated before export. For skinned models, keep the imported
+armature and weight the replacement mesh to its existing bone names.
+
+To replace a texture, select the appropriate `MDB Texture ...` image node in
+the Shader Editor and assign the replacement DDS through the image selector
+at the top of that node. On export, the add-on uses the selected image's disk
+filename in the MDB texture table, so no scripting or custom-property editing
+is needed. Export does not copy, convert, or pack the texture: place that DDS
+under the game model's expected `TEXTURE` or `HD-TEXTURE` location yourself.
+Keep all existing shader texture slots. If you lack a normal, reflection, or
+mask texture, use a compatible neutral DDS rather than deleting its node.
+
 ## Good things to know
 Character hitboxes are not stored in the model nor animation file, these have to be edited externally (Havoc)
 
