@@ -156,6 +156,7 @@ Custom Properties you should know about:
   - Duration - The actual duration in frames that playback takes in engine
   - Loop - Intention for the animation to be able to loop or not
   - Keyframes - Amount of keyframes in the animation (regardless if they actually exist or not, cannot be below 2)
+- There is a menu option on the right hand side of the Dopesheet to "Add CANM Properties" if any go missing or you introduce a new animation.
 
 ### Editing additive animations
 

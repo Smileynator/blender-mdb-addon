@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Earth Defense Force Formats",
     "author": "Smileynator / BlueAmulet / Ktaro",
-    "version": (1, 9, 2),
+    "version": (1, 9, 3),
     "blender": (3, 6, 0),
     "location": "File > Import-Export",
     "description": "Import-Export MDB, CANM, mesh, UV's, materials, textures, Animations from Earth Defense Force",
@@ -235,6 +235,97 @@ class ExportCANM_6(bpy.types.Operator, ExportHelper):
         )
 
 
+def get_context_action(context):
+    action = getattr(context, "active_action", None)
+    if action is not None:
+        return action
+    obj = context.active_object
+    if obj is None or obj.animation_data is None:
+        return None
+    return obj.animation_data.action
+
+
+def infer_canm_timing(context, action):
+    frame_start, frame_end = action.frame_range
+    if frame_end > frame_start:
+        sample_count = int(round(frame_end - frame_start)) + 1
+    else:
+        sample_count = int(context.scene.frame_end - context.scene.frame_start) + 1
+    sample_count = max(2, sample_count)
+    return float(sample_count), sample_count
+
+
+class EDF_OT_add_canm_action_properties(bpy.types.Operator):
+    """Add the CANM custom properties required for exporting this Action"""
+
+    bl_idname = "edf.add_canm_action_properties"
+    bl_label = "Add CANM Properties"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return get_context_action(context) is not None
+
+    def execute(self, context):
+        action = get_context_action(context)
+        if action is None:
+            self.report({'ERROR'}, "No active Action found")
+            return {'CANCELLED'}
+
+        duration, keyframes = infer_canm_timing(context, action)
+        added = []
+        if "duration" not in action:
+            action["duration"] = duration
+            added.append("duration")
+        if "loop" not in action:
+            action["loop"] = False
+            added.append("loop")
+        if "keyframes" not in action:
+            action["keyframes"] = keyframes
+            added.append("keyframes")
+
+        if added:
+            self.report(
+                {'INFO'},
+                f"Added CANM properties to {action.name!r}: {', '.join(added)}",
+            )
+        else:
+            self.report(
+                {'INFO'},
+                f"Action {action.name!r} already has CANM properties",
+            )
+        return {'FINISHED'}
+
+
+class EDF_PT_canm_action_properties(bpy.types.Panel):
+    bl_label = "EDF CANM"
+    bl_idname = "EDF_PT_canm_action_properties"
+    bl_space_type = "DOPESHEET_EDITOR"
+    bl_region_type = "UI"
+    bl_category = "EDF"
+
+    def draw(self, context):
+        layout = self.layout
+        action = get_context_action(context)
+        if action is None:
+            layout.label(text="No active Action.", icon="INFO")
+            return
+
+        missing = [
+            name for name in ("duration", "loop", "keyframes")
+            if name not in action
+        ]
+        row = layout.row()
+        row.operator(
+            EDF_OT_add_canm_action_properties.bl_idname,
+            icon="ADD",
+        )
+        if missing:
+            layout.label(text=f"Missing: {', '.join(missing)}", icon="ERROR")
+        else:
+            layout.label(text="CANM properties present.", icon="CHECKMARK")
+
+
 def menu_func_import(self, context):
     self.layout.operator(ImportMDB.bl_idname, text="Earth Defense Force Model (.mdb)")
     self.layout.operator(ImportCANM.bl_idname, text="Earth Defense Force Animations (.canm)")
@@ -254,6 +345,8 @@ classes = (
     ImportCANM,
     ExportCANM_5,
     ExportCANM_6,
+    EDF_OT_add_canm_action_properties,
+    EDF_PT_canm_action_properties,
     *additive_editing.CLASSES,
 )
 
